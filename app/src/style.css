@@ -352,5 +352,5 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
 .disclosure.open .disc-inner { padding-top: 8px; }
 
 /* ---------- Chat, in a collection's banner ---------- */
-.folder-head .chatbtn { flex: none; margin-right: 2px; padding: 3px 12px; font-size: 12px; }
+.folder-head .chatbtn { flex: none; margin-right: 2px; padding: 0; width: 26px; height: 24px; display: inline-flex; align-items: center; justify-content: center; }
 .folder-head .chatbtn:disabled { opacity: .35; cursor: default; transform: none; }

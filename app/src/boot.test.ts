@@ -1090,7 +1090,9 @@ test("each collection's banner has a white Chat button, left of the song count",
   const head = $$("#folders .folder-head")[0];
   expect([...head.children].map((c) => c.className.split(" ")[0])).toEqual(["chev", "fname", "btn", "count", "x"]);
   const chat = head.querySelector<HTMLElement>("[data-chat]")!;
-  expect(chat.textContent).toBe("Chat");
+  expect(chat.querySelector("svg")).not.toBeNull();
+  expect(chat.textContent!.trim()).toBe("");
+  expect(chat.getAttribute("aria-label")).toBe("Chat about this collection");
   expect(chat.classList.contains("ghost")).toBe(false);                                   // the same white style as the Ask button
   expect(chat.nextElementSibling!.textContent).toBe("2");                                  // and the count comes right after it
 });

@@ -159,7 +159,7 @@ def _wav(tmp_path, seconds_of_music=14, lead_silence=2.0, tail_silence=1.0):
 
 
 def test_project_analysis_measures_the_stems_and_groove_without_hunting_for_a_drop(tmp_path, monkeypatch):
-    monkeypatch.setattr(project.embed, "embed", lambda audio, sr: np.ones(512, dtype=np.float32) / 22.6)   # CLAP is covered elsewhere
+    monkeypatch.setattr(project.models, "embed", lambda audio, sr: np.ones(512, dtype=np.float32) / 22.6)   # CLAP is covered elsewhere
     doc, vectors = project.analyse(_wav(tmp_path))
     assert set(vectors) == {"mix", "drums", "bass", "other", "groove"}                 # the same vibe vectors a library song has
     assert len(vectors["groove"]) == features.GROOVE_DIM

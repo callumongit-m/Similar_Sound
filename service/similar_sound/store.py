@@ -13,7 +13,7 @@ import numpy as np
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS tracks(id TEXT PRIMARY KEY, source TEXT, title TEXT, artist TEXT,
-                                  created REAL, doc TEXT);
+                                  created REAL, doc TEXT, bpm REAL, key TEXT, key_alt TEXT);
 CREATE TABLE IF NOT EXISTS vectors(track_id TEXT, kind TEXT, dim INTEGER, data BLOB,
                                    PRIMARY KEY(track_id, kind));
 CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, status TEXT,
@@ -38,6 +38,29 @@ class Store:
             for col in ("title", "artist"):  # libraries created before jobs carried a name
                 if col not in cols:
                     self._db.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
+            self._migrate_track_summary()
+            self.prune_projects()
+
+    def _migrate_track_summary(self) -> None:
+        """Libraries from before bpm/key had their own columns: copy them out of each document, once."""
+        cols = {r["name"] for r in self._db.execute("PRAGMA table_info(tracks)")}
+        if "bpm" in cols:
+            return
+        for col, kind in (("bpm", "REAL"), ("key", "TEXT"), ("key_alt", "TEXT")):
+            self._db.execute(f"ALTER TABLE tracks ADD COLUMN {col} {kind}")
+        for r in self._db.execute("SELECT id, doc FROM tracks").fetchall():
+            self._db.execute("UPDATE tracks SET bpm=?, key=?, key_alt=? WHERE id=?", (*self._summary(json.loads(r["doc"])), r["id"]))
+        self._db.commit()
+
+    @staticmethod
+    def _summary(doc: dict) -> tuple:
+        """What the song list shows, kept in columns so listing never has to open the documents."""
+        return doc.get("bpm"), doc.get("key"), json.dumps(doc.get("key_alternatives") or [])
+
+    def prune_projects(self, keep: int = 5) -> None:
+        """Captured projects are only ever compared while fresh: keep the newest few."""
+        self._db.execute("DELETE FROM projects WHERE id NOT IN (SELECT id FROM projects ORDER BY id DESC LIMIT ?)", (keep,))
+        self._db.commit()
 
     def execute(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:
@@ -48,9 +71,9 @@ class Store:
     # tracks
     def add(self, doc: dict, vectors: dict[str, np.ndarray]) -> None:
         with self._lock:
-            self._db.execute("INSERT OR REPLACE INTO tracks VALUES (?,?,?,?,?,?)",
+            self._db.execute("INSERT OR REPLACE INTO tracks(id,source,title,artist,created,doc,bpm,key,key_alt) VALUES (?,?,?,?,?,?,?,?,?)",
                              (doc["id"], doc["source"], doc.get("title", ""), doc.get("artist", ""),
-                              time.time(), json.dumps(doc)))
+                              time.time(), json.dumps(doc), *self._summary(doc)))
             self._db.execute("DELETE FROM vectors WHERE track_id=?", (doc["id"],))
             for kind, v in vectors.items():
                 v = np.asarray(v, dtype=np.float32)
@@ -64,8 +87,8 @@ class Store:
             if doc is None:
                 return False
             doc.update(fields)
-            self._db.execute("UPDATE tracks SET doc=?, title=?, artist=? WHERE id=?",
-                             (json.dumps(doc), doc.get("title", ""), doc.get("artist", ""), track_id))
+            self._db.execute("UPDATE tracks SET doc=?, title=?, artist=?, bpm=?, key=?, key_alt=? WHERE id=?",
+                             (json.dumps(doc), doc.get("title", ""), doc.get("artist", ""), *self._summary(doc), track_id))
             self._db.commit()
         return True
 
@@ -84,12 +107,9 @@ class Store:
         return json.loads(rows[0]["doc"]) if rows else None
 
     def list(self) -> list[dict]:
-        out = []
-        for r in self.execute("SELECT id,source,title,artist,doc FROM tracks ORDER BY created DESC"):
-            d = json.loads(r["doc"])
-            out.append({"id": r["id"], "title": r["title"], "artist": r["artist"], "source": r["source"],
-                        "bpm": d.get("bpm"), "key": d.get("key"), "key_alternatives": d.get("key_alternatives", [])})
-        return out
+        return [{"id": r["id"], "title": r["title"], "artist": r["artist"], "source": r["source"], "bpm": r["bpm"],
+                 "key": r["key"], "key_alternatives": json.loads(r["key_alt"] or "[]")}
+                for r in self.execute("SELECT id,source,title,artist,bpm,key,key_alt FROM tracks ORDER BY created DESC")]
 
     def vector(self, track_id: str, kind: str) -> np.ndarray | None:
         rows = self.execute("SELECT data FROM vectors WHERE track_id=? AND kind=?", (track_id, kind))

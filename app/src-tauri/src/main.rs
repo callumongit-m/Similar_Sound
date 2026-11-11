@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::{
+    io::Write,
     net::TcpStream,
     os::unix::process::CommandExt,
     path::PathBuf,
@@ -20,6 +21,18 @@ struct Service(Mutex<Option<Child>>);
 
 fn service_up() -> bool {
     TcpStream::connect_timeout(&"127.0.0.1:8765".parse().unwrap(), Duration::from_millis(300)).is_ok()
+}
+
+/// The window was hidden: ask the service to hand back the memory its analysis models use (about 500 MB).
+/// It declines by itself while an analysis is running, and loads them again on the next one.
+fn release_models() {
+    std::thread::spawn(|| {
+        if let Ok(mut s) = TcpStream::connect_timeout(&"127.0.0.1:8765".parse().unwrap(), Duration::from_millis(300)) {
+            let _ = s.write_all(b"POST /models/unload HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+            let _ = s.set_read_timeout(Some(Duration::from_secs(10)));
+            let _ = std::io::Read::read(&mut s, &mut [0u8; 64]); // wait for the answer so the request is not cut off
+        }
+    });
 }
 
 /// Start service/run.sh unless a service is already answering. Its own process group, so that
@@ -185,6 +198,7 @@ fn toggle_window(app: &AppHandle) {
     match app.get_webview_window("main") {
         Some(w) if w.is_visible().unwrap_or(false) => {
             let _ = w.hide();
+            release_models();
         }
         _ => show_window(app),
     }
@@ -252,6 +266,7 @@ fn main() {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 api.prevent_close();
                 let _ = window.hide();
+                release_models();
             }
         })
         .build(tauri::generate_context!())

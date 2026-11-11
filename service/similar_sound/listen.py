@@ -205,4 +205,5 @@ class Listener:
         doc, self.vectors = result if isinstance(result, tuple) else (result, {})
         self._store.execute("INSERT INTO projects(created, doc) VALUES (?, ?)", (time.time(), json.dumps(doc)))
         self.project_id = self._store.execute("SELECT max(id) AS i FROM projects")[0]["i"]
+        self._store.prune_projects()
         self.project, self.state, self.message = doc, "ready", ""

@@ -6,6 +6,9 @@ import { songCard } from "./songs";
 import { $, errorText, esc, niceName, run, syncCards, toast } from "./ui";
 import type { Card } from "./ui";
 
+const CHAT_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.6A8 8 0 1 1 21 12z"/></svg>`;
+const CHAT_LABEL = (n: number) => n ? "Chat about every song in this collection" : "Add songs to this collection to chat about it";
+
 export interface CollHost { onOpen(id: string): void; onChat(collectionId: number): void; refresh(): Promise<void> }
 
 /** Shown on hover of the (i) beside "New collection". It describes how the drag and remove gestures below work. */
@@ -39,7 +42,7 @@ function folderCard(c: Collection): Card {
     cls: `folder${open.has(c.id) ? " open" : ""}`,
     attrs: { cid: String(c.id) },
     html: `<div class="folder-head" data-toggle><span class="chev">›</span><span class="fname" data-name>${esc(c.name)}</span>
-        <button class="btn small chatbtn" data-chat ${c.track_ids.length ? "" : "disabled"} title="${c.track_ids.length ? "Chat about every song in this collection" : "Add songs to this collection to chat about it"}">Chat</button>
+        <button class="btn small chatbtn" data-chat ${c.track_ids.length ? "" : "disabled"} title="${CHAT_LABEL(c.track_ids.length)}" aria-label="Chat about this collection">${CHAT_ICON}</button>
         <span class="count">${c.track_ids.length}</span><button class="x" data-delete title="Delete this collection (songs stay in your library)">✕</button></div>
       <div class="folder-body"><div class="folder-inner"><div class="folder-list">${rows || `<div class="sub dropmsg">Drop songs here</div>`}</div></div></div>`,
   };

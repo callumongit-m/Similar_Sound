@@ -9,7 +9,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from . import config, embed, features, segment, stems
+from . import config, features, models, segment
 
 SILENCE = 10 ** (-50 / 20)   # -50 dBFS: below this is not music
 MIN_SECONDS = 4.0
@@ -35,13 +35,13 @@ def analyse(wav: Path) -> tuple[dict, dict[str, np.ndarray]]:
                                    config.ANALYSIS_SR)
     except ValueError:
         raise ProjectError("I couldn't find a steady tempo in that. Play a section with the drums in.") from None
-    parts = stems.split(y)
+    parts = models.split(y)
     doc = features.extract(y, parts, bpm, None)
     doc.update(kind="project", title="Your project", artist="", seconds=round(y.shape[1] / config.STEM_SR, 1))
     # The same vibe vectors a library song has, so the feel of the project can be measured against theirs.
-    vectors = {"mix": embed.embed(y, config.STEM_SR)}
+    vectors = {"mix": models.embed(y, config.STEM_SR)}
     for name in ("drums", "bass", "other"):
-        vectors[name] = embed.embed(parts[name], config.STEM_SR)
+        vectors[name] = models.embed(parts[name], config.STEM_SR)
     if not doc["groove"].get("empty"):
         vectors["groove"] = np.array(doc["groove"]["vector"], dtype=np.float32)
     return doc, vectors

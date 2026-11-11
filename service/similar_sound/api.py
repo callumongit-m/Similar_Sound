@@ -13,7 +13,7 @@ from dataclasses import asdict
 
 import threading
 
-from . import ableton, coach, config, download, keychain, library, listen, llm, names, pipeline, rename, similarity
+from . import ableton, coach, config, download, keychain, library, listen, llm, models, names, pipeline, rename, similarity
 from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
@@ -125,6 +125,11 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     @app.get("/status")
     def status():
         return queue.status()
+
+    @app.post("/models/unload")
+    def unload_models():
+        """The window was hidden: hand the analysis models' memory back. Does nothing while an analysis is using them."""
+        return {"unloaded": models.unload(), "loaded": models.loaded()}
 
     @app.post("/pause")
     def pause():

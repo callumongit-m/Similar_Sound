@@ -13,7 +13,7 @@ from typing import Callable
 import librosa
 import numpy as np
 
-from . import config, download, embed, features, segment, stems
+from . import config, download, features, models, segment
 
 
 @dataclass
@@ -56,7 +56,7 @@ def ingest(source: str, checkpoint: Callable[[], None] = lambda: None,
 
     checkpoint()
     progress("stems")
-    parts = stems.split(clip)
+    parts = models.split(clip)
 
     checkpoint()
     progress("features")
@@ -67,9 +67,9 @@ def ingest(source: str, checkpoint: Callable[[], None] = lambda: None,
     progress("embed")
     cut = int(split_s * config.STEM_SR)
     sr = config.STEM_SR
-    vectors = {"mix": embed.embed(clip[:, cut:], sr)}
+    vectors = {"mix": models.embed(clip[:, cut:], sr)}
     for name in ("drums", "bass", "other"):
-        vectors[name] = embed.embed(parts[name][:, cut:], sr)
+        vectors[name] = models.embed(parts[name][:, cut:], sr)
     vectors["groove"] = np.array(doc["groove"]["vector"], dtype=np.float32)
 
     doc.update({
