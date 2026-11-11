@@ -59,6 +59,7 @@ export const api = {
   resume: () => post("/resume"),
   tracks: () => call<TrackSummary[]>("/tracks"),
   track: (id: string) => call<TrackDoc>(`/tracks/${id}`),
+  deleteTrack: (id: string) => del(`/tracks/${id}`),
   similar: (id: string, kind = "groove") => call<Similar[]>(`/tracks/${id}/similar?kind=${kind}`),
   ask: (id: string, question: string, history: Turn[] = []) => post<{ answer: string }>(`/tracks/${id}/ask`, { question, history }),
   // the API key (any company): sent once, stored in the Keychain by the service, never read back

@@ -8,7 +8,7 @@ import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare
 import { openDetail } from "./detail";
 import { keyPanelHtml, mountKeyPanel, toggleKeyPanel } from "./keypanel";
 import { BOOT_GRACE_MS, S } from "./state";
-import { $, run } from "./ui";
+import { $, run, toast } from "./ui";
 
 // ---------- diagnostics: errors and startup go to ~/.similar_sound/app.log (via the Rust side) ----------
 const report = (msg: string) => { invoke("log", { msg }).catch(() => {}); };
@@ -103,6 +103,12 @@ $("#nav").addEventListener("click", (e) => {
 const detailHost = {
   onBack: () => closeDetail(true),
   onOpen: (id: string) => openDetail($("#detail"), id, detailHost),
+  onRemove: (id: string) => run(async () => {
+    await api.deleteTrack(id);
+    closeDetail(true);
+    toast("Removed. Paste its link again to analyse it from scratch.");
+    await refresh(true);
+  }),
   onRedrop: (url: string) => run(async () => { const { id } = await api.addJob(url); S.sessionJobs.add(id); closeDetail(false); showTab("add"); await refresh(); }),
 };
 function openSong(id: string) {

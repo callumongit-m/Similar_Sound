@@ -139,6 +139,17 @@ def test_timestamp_validation_and_wrong_job(tmp_path):
     assert q.status()["jobs"][0]["source"] == "a#t=184"
 
 
+def test_the_artist_the_uploader_filled_in_beats_the_upload_account():
+    from similar_sound.download import split_title
+    # the real case: account "Slacker 85" uploaded a track whose artist field says TB-203
+    assert split_title("Another Banger", "Slacker 85", "TB-203") == ("Another Banger", "TB-203")
+    assert split_title("TB-203 - Another Banger", "Slacker 85", "TB-203") == ("Another Banger", "TB-203")   # not said twice
+    assert split_title("tb-203 - Another Banger", "x", "TB-203") == ("Another Banger", "TB-203")           # whatever the capitals
+    assert split_title("A - B", "x", "") == ("B", "A")                                                     # no artist field: the title still works
+    assert split_title("Song", "Account", "") == ("Song", "Account")                                       # and the account is the last resort
+    assert split_title("Song", "Account", "   ") == ("Song", "Account")
+
+
 def test_split_title_prefers_artist_dash_song_over_uploader():
     from similar_sound.download import split_title
     assert split_title("MAX DEAN - TALKING WITH MYSELF (UNRELEASED)", "J8") == ("TALKING WITH MYSELF (UNRELEASED)", "MAX DEAN")

@@ -330,3 +330,11 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
   box-shadow: 0 10px 30px rgba(0,0,0,.35), inset 0 1px 0 rgba(255,255,255,.12);
   opacity: 0; transform: translateY(-4px) scale(.98); transform-origin: top left; pointer-events: none; transition: opacity .18s ease, transform .22s var(--ease); }
 .info:hover .infotip, .info:focus-visible .infotip { opacity: 1; transform: none; }
+
+/* ---------- an open song: Back on the left, Remove on the right ---------- */
+.detail-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 2px; }
+.detail-top .back { padding-bottom: 8px; }
+.removebtn { background: none; border: 0; padding: 4px 10px; margin: -4px -10px 4px 0; border-radius: 999px; font-size: 12px; color: var(--muted); transition: color .15s, background .15s; }
+.removebtn:hover { color: var(--err); background: rgba(255,255,255,.06); }
+.removebtn.armed { color: var(--err); background: rgba(255,120,120,.12); }
+.sub.where { margin-top: 2px; }

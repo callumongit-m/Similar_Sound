@@ -142,6 +142,17 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
             raise HTTPException(404)
         return doc
 
+    @app.delete("/tracks/{track_id}")
+    def remove_track(track_id: str):
+        """Remove a song from the library (and from every collection) so it can be analysed again from scratch."""
+        if store.get(track_id) is None:
+            raise HTTPException(404, "That song isn't in your library.")
+        if queue.active_for(track_id):
+            raise HTTPException(409, "That song is being analysed right now. Remove it once it has finished.")
+        store.delete_track(track_id)
+        queue.forget(track_id)
+        return {"id": track_id}
+
     @app.get("/tracks/{track_id}/similar")
     def similar(track_id: str, kind: str = "groove", k: int = 5):
         v = store.vector(track_id, kind)

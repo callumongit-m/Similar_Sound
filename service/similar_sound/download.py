@@ -23,13 +23,21 @@ class Fetched:
     drop_start_override: float | None
 
 
-def split_title(title: str, uploader: str = "") -> tuple[str, str]:
-    """(song, artist). SoundCloud titles are usually "Artist - Song"; the uploader is often a label or
-    a promoter rather than the artist, so the title wins when it has that shape."""
-    t = (title or "").strip()
+def split_title(title: str, uploader: str = "", artist: str = "") -> tuple[str, str]:
+    """(song, artist). Best source first:
+      1. the artist the uploader filled in on the track (SoundCloud's own "artist" field). The upload *account*
+         is often a label, a promoter or a fan page: a track by TB-203 sits on the account "Slacker 85";
+      2. "Artist - Song" in the title, which is how most uploads are named;
+      3. the uploading account, as a last resort."""
+    t, a = (title or "").strip(), (artist or "").strip()
+    if a:
+        prefix = f"{a} - "
+        if t.lower().startswith(prefix.lower()):       # "TB-203 - Another Banger" by artist "TB-203": don't say it twice
+            t = t[len(prefix):].strip()
+        return t, a
     if " - " in t:
-        artist, song = t.split(" - ", 1)
-        return song.strip(), artist.strip()
+        a, song = t.split(" - ", 1)
+        return song.strip(), a.strip()
     return t, (uploader or "").strip()
 
 
@@ -44,7 +52,7 @@ def peek(source: str) -> tuple[str, str] | None:
 
     with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "noplaylist": True}) as ydl:
         info = ydl.extract_info(base, download=False)
-    return split_title(info.get("title", ""), info.get("uploader", ""))
+    return split_title(info.get("title", ""), info.get("uploader", ""), info.get("artist") or "")
 
 
 def _parse_override(fragment: str) -> float | None:
@@ -79,7 +87,7 @@ def fetch(source: str) -> Fetched:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(base, download=True)
     wav = next(work.glob("audio.wav"))
-    song, artist = split_title(info.get("title", ""), info.get("uploader", ""))
+    song, artist = split_title(info.get("title", ""), info.get("uploader", ""), info.get("artist") or "")
     return Fetched(wav, song, artist, base, override)
 
 

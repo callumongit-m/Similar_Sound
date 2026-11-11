@@ -38,7 +38,7 @@ const GAPS = { feel: FEEL, why: WHY, reference: "UK minimal", n: 1, is_collectio
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { state?: string; nextId?: number; down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { removeError?: any; state?: string; nextId?: number; down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
 // The real service gives a job the same track_key from the moment it is created, so one card can follow it.
 const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
@@ -65,6 +65,11 @@ function fakeService() {
       const id = (W.nextId = (W.nextId ?? 4) + 1);
       W.jobs.unshift({ id, source: body.url, status: !W.state || W.state === "idle" ? "running" : "pending", stage: "stems", error: null, title: body.url.includes("two") ? "Second Song" : "Some Song", artist: "Someone", track_key: keyFor(body.url) });
       return ok({ id });
+    }
+    if (path === "/tracks/t1" && method === "DELETE") {
+      if (W.removeError) return fail(409, W.removeError);
+      W.tracks = W.tracks.filter((t) => t.id !== "t1"); W.collections.forEach((c) => (c.track_ids = c.track_ids.filter((x: string) => x !== "t1")));
+      return ok({ id: "t1" });
     }
     if (path === "/tracks/t1") return ok(DOC);
     if (path.startsWith("/tracks/t1/similar")) return ok([]);
@@ -919,4 +924,59 @@ test("a window that already fits is not moved", async () => {
   FakeResizeObserver.all.forEach((o) => o.cb());
   await tick(80);
   expect(setPosition).not.toHaveBeenCalled();
+});
+
+
+// ---------------- removing a song, and where it lives ----------------
+const openT1 = async () => { await boot(); tab("collections"); click($("#unsorted .card.click")); await tick(80); };
+
+test("an open song has Remove at the top right, opposite Back", async () => {
+  await openT1();
+  const top = $("#detail .detail-top");
+  expect([...top.children].map((c) => c.textContent)).toEqual(["← Back", "Remove"]);
+  expect(top.firstElementChild!.hasAttribute("data-back")).toBe(true);
+  expect(top.lastElementChild!.hasAttribute("data-remove")).toBe(true);
+});
+
+test("Remove needs a second click, then forgets the song and returns to the list without it", async () => {
+  W.collections = [{ id: 1, name: "UK minimal", track_ids: ["t1"] }];
+  await boot();
+  tab("collections");
+  click($("#folders .folder-head"));
+  click($("#folders .mini"));
+  await tick(80);
+  click($("#detail [data-remove]"));
+  expect(W.calls.some((c) => c.method === "DELETE" && c.path === "/tracks/t1")).toBe(false);          // the first click only asks
+  expect($("#detail [data-remove]").textContent).toBe("Remove this song?");
+  click($("#detail [data-remove]"));
+  await tick(120);
+  expect(W.calls.filter((c) => c.method === "DELETE" && c.path === "/tracks/t1")).toHaveLength(1);
+  expect($("#detail").hidden).toBe(true);                                                              // back on the Collections list
+  expect($("#pane-collections").hidden).toBe(false);
+  expect($$("#folders .mini").length + $$("#unsorted .card:not(.leaving)").length).toBe(1);            // only Free is left
+  expect($("#toast").textContent).toContain("Paste its link again to analyse it from scratch");
+});
+
+test("if the song can't be removed (it is being analysed) the reason is shown and it stays", async () => {
+  W.removeError = "That song is being analysed right now. Remove it once it has finished.";
+  await openT1();
+  click($("#detail [data-remove]")); click($("#detail [data-remove]"));
+  await tick(120);
+  expect($("#toast").textContent).toContain("being analysed right now");
+  expect($("#detail").hidden).toBe(false);
+});
+
+test("an open song says which collection it is in, or that it is unsorted", async () => {
+  W.collections = [{ id: 1, name: "UK MINIMAL TECH", track_ids: ["t1"] }, { id: 2, name: "Rolling", track_ids: ["t1"] }];
+  await boot();
+  tab("collections");
+  click($("#folders .folder-head"));
+  click($("#folders .mini"));
+  await tick(80);
+  expect($("#detail .where").textContent).toBe("In UK MINIMAL TECH, Rolling");
+});
+
+test("a song in no collection says Unsorted", async () => {
+  await openT1();
+  expect($("#detail .where").textContent).toBe("Unsorted");
 });

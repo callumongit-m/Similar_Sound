@@ -179,3 +179,57 @@ def test_a_follow_up_sends_the_earlier_turns_and_only_the_recent_ones(env):
     c.post("/compare", json={"kind": "track", "id": "ref1"})
     c.post("/compare/ask", json={"question": "go on", "history": turns[:2]})
     assert spy.calls[-1][2] == (("user", "question 0"), ("assistant", "answer 0"), ("user", "question 1"), ("assistant", "answer 1"))
+
+
+# ---------- removing a song so it can be analysed again ----------
+def test_removing_a_song_forgets_it_everywhere_and_leaves_the_others(env):
+    c, store, keys, spy, state = env
+    cid = c.post("/collections", json={"name": "UK minimal"}).json()["id"]
+    for t in ("ref1", "ref2"):
+        c.post(f"/collections/{cid}/tracks", json={"track_id": t})
+    assert c.delete("/tracks/ref1").json() == {"id": "ref1"}
+    assert [t["id"] for t in c.get("/tracks").json()] == ["ref2"]                       # the song is gone, the other is untouched
+    assert c.get("/collections").json()[0]["track_ids"] == ["ref2"]                     # and it left the folder
+    assert c.get("/tracks/ref1").status_code == 404
+    assert c.get("/tracks/ref2/similar").status_code == 200
+    assert store.vector("ref1", "groove") is None                                       # its vectors are gone too
+
+
+def test_removing_clears_its_finished_job_records_so_no_ghost_card_is_left(env):
+    c, store, keys, spy, state = env
+    src = "https://soundcloud.com/x/some-song"
+    from similar_sound.pipeline import track_id
+    store.execute("INSERT INTO jobs(source,status,stage,created,updated) VALUES (?,?,?,0,0)", (src, "done", ""))
+    store.execute("INSERT INTO jobs(source,status,stage,created,updated) VALUES (?,?,?,0,0)", (src + "?si=abc", "done", ""))
+    d = make_doc(tid=track_id(src)); d["title"] = "Some Song"
+    store.add(d, {"groove": np.ones(4, dtype=np.float32)})
+    assert len([j for j in c.get("/status").json()["jobs"] if j["track_key"] == track_id(src)]) == 2
+    c.delete(f"/tracks/{track_id(src)}")
+    assert [j for j in c.get("/status").json()["jobs"] if j["track_key"] == track_id(src)] == []   # whatever share tags the URL had
+
+
+def test_a_song_being_analysed_cannot_be_removed(env):
+    c, store, keys, spy, state = env
+    from similar_sound.pipeline import track_id
+    src = "https://soundcloud.com/x/re-analysing?si=abc"
+    d = make_doc(tid=track_id(src)); d["title"] = "Re-analysing"
+    store.add(d, {"groove": np.ones(4, dtype=np.float32)})
+    store.execute("INSERT INTO jobs(source,status,stage,created,updated) VALUES (?,?,?,0,0)", (src, "running", "stems"))
+    r = c.delete(f"/tracks/{track_id(src)}")
+    assert r.status_code == 409 and "being analysed right now" in r.json()["detail"]
+    assert c.get(f"/tracks/{track_id(src)}").status_code == 200                              # still there
+
+
+def test_removing_an_unknown_song_is_a_clear_404(env):
+    c, *_ = env
+    r = c.delete("/tracks/nope")
+    assert r.status_code == 404 and "isn't in your library" in r.json()["detail"]
+
+
+def test_after_removal_the_same_link_comes_back_unsorted_and_fresh(env):
+    c, store, keys, spy, state = env
+    cid = c.post("/collections", json={"name": "Keep"}).json()["id"]
+    c.post(f"/collections/{cid}/tracks", json={"track_id": "ref1"})
+    c.delete("/tracks/ref1")
+    store.add(make_doc(tid="ref1"), {"groove": np.ones(4, dtype=np.float32)})              # what a re-analysis stores
+    assert c.get("/collections").json()[0]["track_ids"] == []                                 # not back in its old folder: unsorted

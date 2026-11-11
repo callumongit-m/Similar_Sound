@@ -57,6 +57,16 @@ class Store:
                 self._db.execute("INSERT INTO vectors VALUES (?,?,?,?)", (doc["id"], kind, v.size, v.tobytes()))
             self._db.commit()
 
+    def delete_track(self, track_id: str) -> bool:
+        """Forget a song entirely: its analysis, its vectors and its place in every collection. (No audio is
+        ever kept, so there is nothing else to delete.) Returns whether it existed."""
+        with self._lock:
+            existed = self._db.execute("DELETE FROM tracks WHERE id=?", (track_id,)).rowcount > 0
+            self._db.execute("DELETE FROM vectors WHERE track_id=?", (track_id,))
+            self._db.execute("DELETE FROM collection_tracks WHERE track_id=?", (track_id,))
+            self._db.commit()
+        return existed
+
     def get(self, track_id: str) -> dict | None:
         rows = self.execute("SELECT doc FROM tracks WHERE id=?", (track_id,))
         return json.loads(rows[0]["doc"]) if rows else None

@@ -18,6 +18,7 @@ import re
 
 from . import download
 from .pipeline import TrackRecord, track_id
+from .pipeline import track_id as tid
 from .segment import DropNotFound
 from .store import Store
 
@@ -58,6 +59,17 @@ class JobQueue:
             return
         if named:
             self._set(job_id, title=named[0], artist=named[1])
+
+    def active_for(self, track_id: str) -> bool:
+        """Is this song being analysed, or waiting to be, right now?"""
+        return any(track_id == tid(r["source"]) for r in self._store.execute(
+            "SELECT source FROM jobs WHERE status IN ('pending','running','needs_timestamp')"))
+
+    def forget(self, track_id: str) -> None:
+        """Drop the finished/failed job records of a removed song, so it leaves no ghost card behind."""
+        for r in self._store.execute("SELECT id, source FROM jobs WHERE status IN ('done','error')"):
+            if tid(r["source"]) == track_id:
+                self._store.execute("DELETE FROM jobs WHERE id=?", (r["id"],))
 
     def dismiss(self, job_id: int) -> None:
         """Remove a failed / stuck job from the list (finished jobs live on as library tracks)."""
