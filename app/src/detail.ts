@@ -1,6 +1,6 @@
 // One song, opened: BPM, key, swing, then the ask box (and a way to fix a wrong drop).
 import { api, type Similar, type TrackDoc } from "./api";
-import { askBoxHtml, wireAsk } from "./ask";
+import { askSection, wireAsk } from "./ask";
 import { $, esc, mmss, restart, run } from "./ui";
 
 export interface DetailHost { onBack(): void; onRedrop(url: string): void; onOpen(id: string): void }
@@ -25,7 +25,7 @@ function render(el: HTMLElement, d: TrackDoc, similar: Similar[], host: DetailHo
   el.innerHTML = `<button class="back" data-back>← Back</button>
     <div class="rise" style="--i:0"><div class="h1">${esc(d.title)}</div><div class="sub">${esc(d.artist)}</div></div>
     <div class="chips">${chips.map(([k, v], i) => `<div class="chip big pop" style="--i:${i + 1}"><span>${esc(k)}</span>${esc(v)}</div>`).join("")}</div>
-    <div class="rise" style="--i:3"><div class="section">Ask about this track</div>${askBoxHtml("e.g. What makes the groove feel the way it does?")}</div>${alts}${sim}`;
+    <div class="rise" style="--i:3">${askSection("Ask about this track", "e.g. What makes the groove feel the way it does?")}</div>${alts}${sim}`;
   wireAsk(el, (q) => api.ask(d.id, q));
   el.onclick = (e) => {
     const t = (e.target as HTMLElement).closest<HTMLElement>("[data-back],[data-redrop],[data-open]");

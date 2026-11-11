@@ -1,7 +1,7 @@
 // "Compare my project": an orb that waits for Ableton, listens while it plays, then lets you pick what to
 // compare with and shows where your project differs.
 import { api, type Comparison, type Listen } from "./api";
-import { askBoxHtml, wireAsk } from "./ask";
+import { askSection, wireAsk } from "./ask";
 import { S } from "./state";
 import { $, errorText, esc, niceName, run, toast } from "./ui";
 
@@ -33,7 +33,7 @@ function resultHtml(r: Comparison) {
   return `<div class="cmp-head rise">Compared with <b>${esc(r.reference)}</b></div>
     ${r.small ? `<div class="answer notice rise" style="--i:1">${esc(r.note)}</div>` : ""}
     <div class="section">Where your project differs</div><div class="gaps">${rows}</div>
-    <div class="section">Ask me about it</div>${askBoxHtml("e.g. What should I fix first?")}
+    ${askSection("Ask about this comparison", "e.g. What should I fix first?")}
     <div style="margin-top:12px"><button class="btn ghost small" data-again>Listen again</button></div>`;
 }
 

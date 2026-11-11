@@ -4,6 +4,20 @@
 import { ApiError } from "./api";
 import { $, errorText, esc } from "./ui";
 
+/** Turns a model's reply into safe HTML: **bold**, "- " / "* " bullets as dots; line breaks and numbered lines are kept
+ *  as written. Everything is escaped first, so a reply can never inject markup. */
+export function formatAnswer(text: string): string {
+  return esc(text)
+    .replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>")
+    .replace(/^[ \t]*[*-][ \t]+/gm, "• ");
+}
+
+/** The "Ask about ..." heading, the one-line caveat about what data exists, and the box. */
+export const askSection = (title: string, placeholder: string) => `
+  <div class="section">${esc(title)}</div>
+  <div class="section-sub">Each song only has data for the main build up and drop.</div>
+  ${askBoxHtml(placeholder)}`;
+
 export const askBoxHtml = (placeholder: string) => `
   <div class="askbox" data-askbox>
     <textarea data-q placeholder="${esc(placeholder)}"></textarea>
@@ -20,7 +34,7 @@ export function wireAsk(root: HTMLElement, send: (question: string) => Promise<{
   async function ask(question: string) {
     show("Thinking…", "thinking");
     try {
-      show(esc((await send(question)).answer));
+      show(formatAnswer((await send(question)).answer));
     } catch (e) {
       if (e instanceof ApiError && e.code === "no_key") {
         show(`${esc(e.message)} <button class="btn small" data-openkey style="margin-left:6px">Add key</button>`, "notice");

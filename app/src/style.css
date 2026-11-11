@@ -241,3 +241,8 @@ code { background: var(--glass-hi); padding: 1px 6px; border-radius: 6px; font-s
 .kp-foot { font-size: 11px; color: var(--faint); margin-top: 6px; line-height: 1.4; }
 .linkbtn { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; font-size: 11px; }
 .linkbtn:hover { color: var(--text); }
+
+/* ---------- formatted answers + the caveat under "Ask about ..." ---------- */
+.section-sub { margin: -4px 0 8px; font-size: 11.5px; line-height: 1.4; color: var(--muted); }
+.answer strong { font-weight: 650; color: var(--text); }
+.answer { line-height: 1.5; }

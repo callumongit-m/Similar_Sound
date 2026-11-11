@@ -23,7 +23,7 @@ const GAPS = { reference: "UK minimal", n: 1, is_collection: true, small: true, 
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
 // The real service gives a job the same track_key from the moment it is created, so one card can follow it.
 const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
@@ -46,7 +46,7 @@ function fakeService() {
     if (path === "/jobs" && method === "POST") { W.jobs.unshift({ id: 5, source: body.url, status: "running", stage: "stems", error: null, title: "Some Song", artist: "Someone", track_key: keyFor(body.url) }); return ok({ id: 5 }); }
     if (path === "/tracks/t1") return ok(DOC);
     if (path.startsWith("/tracks/t1/similar")) return ok([]);
-    if (path === "/tracks/t1/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: "It is rolling." }); }
+    if (path === "/tracks/t1/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: W.answerText ?? "It is rolling." }); }
     if (path === "/settings" && method === "GET") return ok(W.llm);
     if (path === "/settings/llm" && method === "POST") {
       W.keyBodies.push(body);
@@ -407,4 +407,49 @@ test("Enter works in the comparison's ask box too", async () => {
   await tick(80);
   expect(W.calls.some((c) => c.path === "/compare/ask" && c.body.question === "what should I fix first?")).toBe(true);
   expect($("#cmp [data-answer] .answer").textContent).toBe("Fix the bass first.");
+});
+
+
+// ---------------- ask: formatting + the caveat ----------------
+const CAVEAT = "Each song only has data for the main build up and drop.";
+
+test("every 'ask about' heading carries the caveat about what data a song has", async () => {
+  await boot();
+  tab("collections");
+  click($("#unsorted .card.click"));
+  await tick(80);
+  const heading = [...document.querySelectorAll("#detail .section")].find((h) => h.textContent === "Ask about this track")!;
+  expect(heading.nextElementSibling!.textContent).toBe(CAVEAT);
+  expect(heading.nextElementSibling!.classList.contains("section-sub")).toBe(true);
+});
+
+test("the comparison's ask heading has the same caveat", async () => {
+  await boot();
+  tab("compare");
+  await tick(80);
+  W.listen = { ...LISTEN, state: "ready", heard: { bpm: 124, key: "A min", seconds: 22 } };
+  await tick(400);
+  click($("#cmp .pick[data-kind='track']"));
+  await tick(80);
+  const heading = [...document.querySelectorAll("#cmp .section")].find((h) => /^Ask about this/.test(h.textContent ?? ""))!;
+  expect(heading.textContent).toBe("Ask about this comparison");
+  expect(heading.nextElementSibling!.textContent).toBe(CAVEAT);
+});
+
+test("**bold** in an answer is shown bold, with the numbered list kept and nothing injected", async () => {
+  W.answerText = "To recreate it:\n1. **Keep it simple:** one oscillator.\n2. **Focus the frequency:** cut below 250 Hz.\n- a bullet\n<img src=x onerror=alert(1)> and **unfinished";
+  await boot();
+  tab("collections");
+  click($("#unsorted .card.click"));
+  await tick(80);
+  ($("#detail [data-q]") as HTMLTextAreaElement).value = "wavetable?";
+  click($("#detail [data-ask]"));
+  await tick(80);
+  const a = $("#detail [data-answer] .answer");
+  expect([...a.querySelectorAll("strong")].map((s) => s.textContent)).toEqual(["Keep it simple:", "Focus the frequency:"]);
+  expect(a.textContent).toContain("1. Keep it simple: one oscillator.");        // numbering survives, asterisks are gone
+  expect(a.textContent).toContain("• a bullet");
+  expect(a.textContent).toContain("**unfinished");                              // an unmatched ** is left alone, not eaten
+  expect(a.querySelector("img")).toBeNull();                                    // the reply cannot inject markup
+  expect(a.innerHTML).toContain("&lt;img");
 });
