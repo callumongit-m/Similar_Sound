@@ -31,7 +31,7 @@ const GAPS = { feel: FEEL, why: WHY, reference: "UK minimal", n: 1, is_collectio
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { state?: string; nextId?: number; down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
 // The real service gives a job the same track_key from the moment it is created, so one card can follow it.
 const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
@@ -47,12 +47,16 @@ function fakeService() {
     W.calls.push({ method, path, body });
     const ok = (b: unknown) => ({ ok: true, status: 200, json: async () => b });
     const fail = (status: number, detail: unknown) => ({ ok: false, status, json: async () => ({ detail }) });
-    if (path === "/status") return ok({ state: "idle", jobs: W.jobs });
+    if (path === "/status") return ok({ state: W.state ?? "idle", jobs: W.jobs });
     if (path === "/tracks") return ok(W.tracks);
     if (path === "/collections" && method === "GET") return ok(W.collections);
     if (path === "/collections" && method === "POST") { const c = { id: 9, name: body.name, track_ids: [] }; W.collections.push(c); return ok(c); }
     if (/^\/collections\/\d+\/tracks$/.test(path) && method === "POST") { W.collections.find((c) => c.id === Number(path.split("/")[2]))!.track_ids.push(body.track_id); return ok({}); }
-    if (path === "/jobs" && method === "POST") { W.jobs.unshift({ id: 5, source: body.url, status: "running", stage: "stems", error: null, title: "Some Song", artist: "Someone", track_key: keyFor(body.url) }); return ok({ id: 5 }); }
+    if (path === "/jobs" && method === "POST") {
+      const id = (W.nextId = (W.nextId ?? 4) + 1);
+      W.jobs.unshift({ id, source: body.url, status: !W.state || W.state === "idle" ? "running" : "pending", stage: "stems", error: null, title: body.url.includes("two") ? "Second Song" : "Some Song", artist: "Someone", track_key: keyFor(body.url) });
+      return ok({ id });
+    }
     if (path === "/tracks/t1") return ok(DOC);
     if (path.startsWith("/tracks/t1/similar")) return ok([]);
     if (path === "/tracks/t1/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: W.answerText ?? "It is rolling." }); }
@@ -694,4 +698,97 @@ test("corner buttons use the concentric radius, and the CSS radius matches the r
   expect(css).toMatch(new RegExp(`--win-radius:\\s*${windowRadius}px`));             // CSS and native window must agree
   expect(css).toMatch(/\.iconbtn\.corner\s*\{[^}]*border-radius:\s*calc\(var\(--win-radius\)\s*-\s*var\(--edge-gap\)\)/);   // outer radius minus the gap
   expect(css).toMatch(/\.iconbtn\.corner\s*\{[^}]*margin-top:\s*var\(--edge-gap\)/);
+});
+
+
+// ---------------- Add song: every song from the session, and why they wait ----------------
+async function paste(url: string) {
+  ($("#url") as HTMLInputElement).value = url;
+  ($("#url") as HTMLInputElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+  await tick(80);
+}
+
+test("Add song keeps every song added this session, in the order added (a playlist)", async () => {
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  await paste("https://soundcloud.com/x/two");
+  await paste("https://soundcloud.com/x/three");
+  const titles = $$("#latest .card").map((c) => c.querySelector(".title")!.textContent);
+  expect(titles).toHaveLength(3);
+  expect(titles[1]).toBe("Second Song");
+  expect($$("#latest .card .status").length).toBe(3);                                  // each has its own state
+});
+
+test("a song that finishes stays in the list as a finished card while the others carry on", async () => {
+  await boot();
+  await paste("https://soundcloud.com/x/free");
+  await paste("https://soundcloud.com/x/two");
+  const [first] = W.jobs.filter((j) => j.track_key === "t2");
+  first.status = "done";
+  await tick(1500);
+  const cards = $$("#latest .card");
+  expect(cards).toHaveLength(2);
+  expect(cards[0].querySelectorAll(".chip")).toHaveLength(2);                          // the first is now a finished song with bpm and key
+  expect(cards[1].querySelector(".status")!.textContent).toContain("Splitting stems");
+});
+
+test("pasting the same song twice does not make two cards", async () => {
+  await boot();
+  await paste("https://soundcloud.com/x/two?si=abc");
+  await paste("https://soundcloud.com/x/two");
+  expect($$("#latest .card")).toHaveLength(1);
+});
+
+test("while Ableton is open a waiting song says why, and the note explains the pause", async () => {
+  W.state = "paused_ableton";
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  await paste("https://soundcloud.com/x/two");
+  expect($$("#latest .card .status").map((s) => s.textContent)).toEqual(["Waiting for Ableton to close", "Waiting for Ableton to close"]);
+  expect($("#queue-note").hidden).toBe(false);
+  expect($("#queue-note").textContent).toContain("Analysis waits while Ableton is open");
+});
+
+test("when Ableton closes the waiting text and the note go away", async () => {
+  W.state = "paused_ableton";
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  expect($("#queue-note").hidden).toBe(false);
+  W.state = "working"; W.jobs[0].status = "running";
+  await tick(1500);
+  expect($("#queue-note").hidden).toBe(true);
+  expect($("#latest .card .status").textContent).toContain("Splitting stems");
+});
+
+test("a song already analysing when Ableton opens says it is paused, not still working", async () => {
+  W.state = "paused_ableton";
+  W.jobs = [{ id: 5, source: "https://soundcloud.com/x/one", status: "running", stage: "stems", error: null, title: "One", artist: "A", track_key: "k:one" }];
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  expect($("#latest .card .status").textContent).toBe("Paused at splitting stems: Ableton is open");
+});
+
+test("a deliberate pause reads as paused, and the Ableton note stays away", async () => {
+  W.state = "paused_user";
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  expect($("#latest .card .status").textContent).toBe("Paused");
+  expect($("#queue-note").hidden).toBe(true);                                          // that note is only about Ableton
+});
+
+test("a song mid-analysis when you pause says where it paused", async () => {
+  W.state = "paused_user";
+  W.jobs = [{ id: 5, source: "https://soundcloud.com/x/one", status: "running", stage: "embed", error: null, title: "One", artist: "A", track_key: "k:one" }];
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  expect($("#latest .card .status").textContent).toBe("Paused at embedding");
+});
+
+test("a song queued behind a running one says it is up next", async () => {
+  W.state = "working";
+  W.jobs = [{ id: 4, source: "https://soundcloud.com/x/other", status: "running", stage: "stems", error: null, title: "Other", artist: "A", track_key: "k:other" }];
+  await boot();
+  await paste("https://soundcloud.com/x/two");
+  expect($("#latest .card .status").textContent).toBe("Up next");
+  expect($("#queue-note").hidden).toBe(true);
 });
