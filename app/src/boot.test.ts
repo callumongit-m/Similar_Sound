@@ -5,11 +5,18 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 vi.mock("@tauri-apps/api/dpi", () => ({ LogicalSize: class { constructor(public width: number, public height: number) {} } }));
 const setSize = vi.fn();
-vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => ({ setSize, close: vi.fn() }) }));
+const setPosition = vi.fn();
+const screen = { y: 100, height: 1000 };                                     // where the window is, and how tall the screen is (physical px)
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => ({ setSize, close: vi.fn(), setPosition, outerPosition: async () => ({ x: 50, y: screen.y }) }),
+  currentMonitor: async () => ({ position: { x: 0, y: 0 }, size: { width: 2000, height: screen.height }, workArea: { position: { x: 0, y: 0 }, size: { width: 2000, height: screen.height } }, scaleFactor: 1 }),
+  PhysicalPosition: class { constructor(public x: number, public y: number) {} },
+}));
 
 const observed: unknown[] = [];
 class FakeResizeObserver {
-  constructor(public cb: () => void) {}
+  static all: FakeResizeObserver[] = [];
+  constructor(public cb: () => void) { FakeResizeObserver.all.push(this); }
   observe(el: unknown) {
     if (!(el instanceof Element)) throw new TypeError("ResizeObserver.observe must be an instance of Element"); // same as WebKit
     observed.push(el);
@@ -95,13 +102,16 @@ async function boot() { await import("./main"); await tick(); }
 const timers: number[] = [];
 const realSetInterval = window.setInterval.bind(window);
 window.setInterval = ((fn: TimerHandler, ms?: number, ...a: unknown[]) => { const id = realSetInterval(fn, ms, ...a); timers.push(id); return id; }) as typeof window.setInterval;
-afterEach(() => { timers.splice(0).forEach((id) => clearInterval(id)); });
+afterEach(() => { timers.splice(0).forEach((id) => clearInterval(id)); delete (HTMLElement.prototype as any).offsetHeight; });
 
 beforeEach(() => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
   observed.length = 0;
+  FakeResizeObserver.all.length = 0;
   setSize.mockClear();
+  setPosition.mockClear();
+  screen.y = 100; screen.height = 1000;
   W = { llm: NO_KEY, keyBodies: [], jobs: [], tracks: [T1, T2], collections: [], listen: { ...LISTEN }, askError: null, calls: [], keySaved: false };
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   fakeService();
@@ -848,4 +858,65 @@ test("a song queued behind a running one says it is up next", async () => {
   await paste("https://soundcloud.com/x/two");
   const statuses = $$("#latest .card .status").map((s) => s.textContent);
   expect(statuses).toEqual(["Splitting stems…", "Up next"]);
+});
+
+
+// ---------------- collections: scrolling, the (i), and staying on screen ----------------
+test("an open collection's songs sit in their own scrollable list", async () => {
+  W.collections = [{ id: 1, name: "UK minimal", track_ids: ["t1", "t2"] }];
+  await boot();
+  tab("collections");
+  const list = $("#folders .folder .folder-list");
+  expect(list.querySelectorAll(".mini")).toHaveLength(2);
+  expect(list.parentElement!.classList.contains("folder-inner")).toBe(true);         // inside the element that animates open/closed
+  const css = readFileSync("src/style.css", "utf8");
+  expect(css).toMatch(/\.folder-list\s*\{[^}]*max-height:\s*\d+px[^}]*overflow-y:\s*auto/);   // taller than that: the wheel scrolls the songs
+  expect(css).toMatch(/\.folder-inner\s*\{[^}]*overflow:\s*hidden/);                              // and the open/close animation still works
+  expect(css).not.toMatch(/\.folder-list\s*\{[^}]*overscroll-behavior:\s*contain/);               // at the ends the wheel carries on to the page
+});
+
+test("the (i) sits left of New collection and its tooltip says how to share and remove tracks", async () => {
+  await boot();
+  tab("collections");
+  const bar = $("#pane-collections .coll-bar");
+  expect([...bar.children].map((c) => c.className.split(" ")[0])).toEqual(["info", "btn"]);   // (i) on the left, button on the right
+  expect(bar.querySelector(".info b")!.textContent).toBe("i");
+  expect(bar.querySelector(".infotip")!.textContent).toBe(
+    "You can have the same track in multiple collections. To do this you must first create the new collection and then drag the track from the one collection into the other. To remove tracks from collections you must click the 'x' icon which appears when your mouse is hovering over that track.");
+  expect(bar.querySelector(".infotip")!.getAttribute("role")).toBe("tooltip");
+  const css = readFileSync("src/style.css", "utf8");
+  expect(css).toMatch(/\.info:hover \.infotip[^{]*\{[^}]*opacity:\s*1/);                          // appears on hover
+});
+
+test("the tooltip's claims are true: dragging into a second folder keeps it in the first, and the x removes it", async () => {
+  W.collections = [{ id: 1, name: "A", track_ids: ["t1"] }, { id: 2, name: "B", track_ids: [] }];
+  await boot();
+  tab("collections");
+  const drop = new Event("drop", { bubbles: true, cancelable: true }) as any;
+  drop.dataTransfer = { getData: () => "t1" };
+  $$("#folders .folder")[1].dispatchEvent(drop);
+  await tick(80);
+  expect(W.collections.map((c) => c.track_ids)).toEqual([["t1"], ["t1"]]);             // same track in both
+  expect($$("#folders .folder")[0].querySelector(".mini [data-remove]")).toBeTruthy();   // the x that removes it
+});
+
+test("a tall window near the bottom of the screen slides up so its lower half stays reachable", async () => {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return (this as HTMLElement).id === "content" ? 900 : 30; } });
+  screen.y = 700; screen.height = 1000;
+  await boot();
+  FakeResizeObserver.all.forEach((o) => o.cb());
+  await tick(80);
+  expect(setPosition).toHaveBeenCalled();
+  const moved = setPosition.mock.calls.at(-1)![0];
+  expect(moved.y).toBe(1000 - 8 - 660);                                                  // bottom edge kept 8px above the screen's edge
+  expect(moved.x).toBe(50);                                                              // sideways position untouched
+});
+
+test("a window that already fits is not moved", async () => {
+  Object.defineProperty(HTMLElement.prototype, "offsetHeight", { configurable: true, get() { return (this as HTMLElement).id === "content" ? 900 : 30; } });
+  screen.y = 100; screen.height = 1000;
+  await boot();
+  FakeResizeObserver.all.forEach((o) => o.cb());
+  await tick(80);
+  expect(setPosition).not.toHaveBeenCalled();
 });

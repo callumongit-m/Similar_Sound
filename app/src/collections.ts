@@ -8,8 +8,15 @@ import type { Card } from "./ui";
 
 export interface CollHost { onOpen(id: string): void; refresh(): Promise<void> }
 
+/** Shown on hover of the (i) beside "New collection". It describes how the drag and remove gestures below work. */
+export const INFO_TIP = "You can have the same track in multiple collections. To do this you must first create the new collection and then drag the track from the one collection into the other. To remove tracks from collections you must click the 'x' icon which appears when your mouse is hovering over that track.";
+
 export const collectionsHtml = `
-  <div class="coll-bar"><button class="btn ghost small" data-new>＋ New collection</button></div>
+  <div class="coll-bar">
+    <span class="info" tabindex="0" aria-describedby="infotip"><b>i</b>
+      <span class="infotip" id="infotip" role="tooltip">${INFO_TIP}</span></span>
+    <button class="btn ghost small" data-new>＋ New collection</button>
+  </div>
   <div class="newrow" id="newrow" hidden><input class="field" id="newname" placeholder="Name, e.g. UK minimal" maxlength="40" spellcheck="false" /><button class="btn small" data-create>Create</button></div>
   <div id="folders"></div>
   <div class="section" id="unsorted-title" hidden>Unsorted</div>
@@ -33,7 +40,7 @@ function folderCard(c: Collection): Card {
     attrs: { cid: String(c.id) },
     html: `<div class="folder-head" data-toggle><span class="chev">›</span><span class="fname" data-name>${esc(c.name)}</span>
         <span class="count">${c.track_ids.length}</span><button class="x" data-delete title="Delete this collection (songs stay in your library)">✕</button></div>
-      <div class="folder-body"><div class="folder-inner">${rows || `<div class="sub dropmsg">Drop songs here</div>`}</div></div>`,
+      <div class="folder-body"><div class="folder-inner"><div class="folder-list">${rows || `<div class="sub dropmsg">Drop songs here</div>`}</div></div></div>`,
   };
 }
 

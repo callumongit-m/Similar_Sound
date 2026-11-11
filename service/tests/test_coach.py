@@ -138,3 +138,22 @@ def test_follow_up_questions_carry_the_conversation_and_the_data_stays_in_the_in
     coach.ask(s, spy, "a", "and the drums?", hist)
     assert spy.history == hist and "stems" in spy.system and spy.prompt.endswith("and the drums?")
     assert "use the conversation so far" in spy.system
+
+
+def test_the_model_is_told_to_ground_answers_in_the_data_never_to_say_it_cannot_hear():
+    s = coach.SYSTEM
+    assert "Based off the data pulled from the audio" in s and "vary the wording" in s
+    assert "NEVER say you cannot hear" in s
+    assert "never the audio itself" not in s                      # the old wording that invited "I cannot hear the audio"
+    assert "can't tell us that" in s                                # what to say when the data cannot answer
+
+
+def test_a_songs_context_repeats_the_framing_instruction():
+    spy = EchoLLM()
+    import tempfile, pathlib
+    from similar_sound.store import Store
+    st = Store(pathlib.Path(tempfile.mkdtemp()) / "c.db")
+    d = doc(); d["groove"] = features.groove(drums(swing=0.0), 124)
+    st.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
+    coach.ask(st, spy, "a", "what is the synth doing?")
+    assert "Based off the data pulled from the audio" in spy.system and "never as something you failed to hear" in spy.system

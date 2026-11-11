@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { addSongHtml, mountAddSong, updateAddSong } from "./addSong";
 import { api } from "./api";
 import { collectionsHtml, mountCollections, updateCollections } from "./collections";
@@ -57,11 +57,27 @@ function stepHeight() {
   if (Math.abs(targetH - curH) < 0.6) { curH = targetH; raf = 0; } else raf = requestAnimationFrame(stepHeight);
   win?.setSize(new LogicalSize(400, Math.round(curH)));
 }
+/** The window grows downward from its top edge, so a tall collection near the bottom of the screen would push its
+ *  lower half off-screen, out of reach. Slide the window up just enough to keep its bottom edge visible. */
+async function keepOnScreen(height: number) {
+  if (!win) return;
+  try {
+    const m = await currentMonitor();
+    if (!m) return;
+    const area = m.workArea ?? { position: m.position, size: m.size };
+    const px = (n: number) => Math.round(n * m.scaleFactor);
+    const bottom = area.position.y + area.size.height - px(8);
+    const pos = await win.outerPosition();
+    if (pos.y + px(height) > bottom) await win.setPosition(new PhysicalPosition(pos.x, Math.max(area.position.y, bottom - px(height))));
+  } catch { /* moving the window is a nicety: never let it break resizing */ }
+}
+
 function fitWindow() {
   const chrome = $(".titlebar").offsetHeight + $("#nav").offsetHeight;
   const want = Math.min(MAX_H, Math.max(MIN_H, chrome + $("#content").offsetHeight));
   if (Math.abs(want - targetH) < 1) return;
   targetH = want;
+  keepOnScreen(want);
   if (!raf) raf = requestAnimationFrame(stepHeight);
 }
 new ResizeObserver(fitWindow).observe($("#content")); // needs the shell above to exist

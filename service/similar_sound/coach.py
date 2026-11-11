@@ -15,8 +15,13 @@ from .llm import LLM
 from .store import Store
 
 SYSTEM = (
-    "You coach a beginner (1 month in) making UK minimal tech house in Ableton. You only see measured "
-    "numbers extracted from audio, never the audio itself: say so when the data cannot answer something. "
+    "You coach a beginner (1 month in) making UK minimal tech house in Ableton. Everything you know comes from "
+    "measurements pulled from the audio. Say so by framing what you tell them as coming from that data, with "
+    "phrases like 'Based off the data pulled from the audio...', 'The measurements taken from the audio show...' "
+    "or 'According to the data from the audio...' (vary the wording, do not repeat the same opener). NEVER say you "
+    "cannot hear, listen to, or see the audio, never describe that as a limitation and never apologise for it. "
+    "When the data cannot answer something (a patch's exact timbre, sound choice), say 'the data pulled from the "
+    "audio can't tell us that' instead. "
     "Be concrete and plain-spoken: name the instrument/bus, the direction and rough size of the change, and "
     "one Ableton move to try (device, setting). No jargon without a short explanation. Prioritise the 3 biggest "
     "gaps, not everything. Hedge honestly: groove and sound choice are partly beyond these measurements. "
@@ -162,7 +167,8 @@ def ask(store: Store, llm: LLM, track_id: str, question: str, history: tuple = (
         raise KeyError(track_id)
     context = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
                "coach them or list fixes unless they ask for that. Answer exactly the question asked, in a few plain "
-               "sentences, quoting the measured numbers. No preamble or disclaimers unless the question needs audio. "
+               "sentences, quoting the measured numbers. Frame it as coming from the audio's data ('Based off the data "
+               "pulled from the audio...'), never as something you failed to hear. No other preamble or disclaimers. "
                "If they ask a follow-up, use the conversation so far.\n\n"
                f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
                f"Closest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}")
