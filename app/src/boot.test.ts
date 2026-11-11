@@ -576,3 +576,52 @@ test("a close key call shows both keys on the song and in what the project heard
   await tick(400);
   expect($("#cmp .cmp-sub").textContent).toContain("B min / E min");
 });
+
+
+// ---------------- comparison: the two ways back ----------------
+const compareEvents = () => W.calls.filter((c) => c.path === "/compare" || c.path === "/listen/start").map((c) => c.path);
+
+test("under 'Compared with' come the two links, in that order, and the old bottom button is gone", async () => {
+  await compareToCollection();
+  const head = $("#cmp .cmp-head");
+  expect(head.textContent).toContain("Compared with UK minimal");
+  const links = head.nextElementSibling!;
+  expect(links.classList.contains("cmp-links")).toBe(true);
+  expect([...links.querySelectorAll("button")].map((b) => b.textContent)).toEqual([
+    "Compare to a different collection or song →", "Listen to my project again →"]);
+  expect($$("#cmp [data-again]")).toHaveLength(1);                          // only the link, no second button at the bottom
+});
+
+test("'Compare to a different collection or song' goes back to the picker without listening again", async () => {
+  await compareToCollection();
+  click($("#cmp [data-rechoose]"));
+  await tick(400);
+  expect($("#cmp .cmp-title").textContent).toBe("Select the Song or Collection you'd like to compare with");
+  expect($$("#cmp .pick").length).toBeGreaterThan(0);
+  expect(W.calls.filter((c) => c.path === "/listen/start")).toHaveLength(1);        // only the initial listen
+  click($("#cmp .pick[data-kind='track']"));                                         // pick a song this time
+  await tick(120);
+  expect(W.calls.filter((c) => c.path === "/compare").map((c) => c.body.kind)).toEqual(["collection", "track"]);
+  expect($("#cmp .cmp-head").textContent).toContain("Compared with");
+  expect($$("#cmp .turn")).toHaveLength(0);                                          // a new comparison starts a fresh conversation
+});
+
+test("'Listen to my project again' re-listens from scratch", async () => {
+  await compareToCollection();
+  click($("#cmp [data-again]"));
+  await tick(120);
+  expect(W.calls.filter((c) => c.path === "/listen/start")).toHaveLength(2);
+  expect($("#cmp .cmp-title").textContent).toBe("Waiting for audio");
+  expect($("#cmp .orb.s-waiting")).toBeTruthy();
+});
+
+test("coming back to Compare shows the earlier comparison, with both links, until you choose otherwise", async () => {
+  await compareToCollection();
+  tab("add");
+  await tick(80);
+  W.listen = { ...W.listen, state: "ready" };
+  tab("compare");
+  await tick(120);
+  expect($("#cmp .cmp-head").textContent).toContain("Compared with UK minimal");
+  expect($$("#cmp .cmp-links button")).toHaveLength(2);
+});

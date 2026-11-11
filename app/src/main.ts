@@ -24,11 +24,11 @@ const KEY_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" st
 
 $("#app").innerHTML = `
   <div class="titlebar" data-tauri-drag-region>
-    <button class="iconbtn keybtn" id="keybtn" title="API key">${KEY_ICON}</button>
+    <button class="iconbtn corner keybtn" id="keybtn" title="API key">${KEY_ICON}</button>
     <span class="grabber" data-tauri-drag-region></span>
     <span class="spacer" data-tauri-drag-region></span>
     <button class="iconbtn gone" id="pause" title="Pause / resume the queue">❚❚</button>
-    <button class="iconbtn" id="close" title="Hide (the ♪ in the menu bar brings it back)">✕</button>
+    <button class="iconbtn corner" id="close" title="Hide (the ♪ in the menu bar brings it back)">✕</button>
   </div>
   <div class="nav" id="nav" style="--i:0"><span class="slider"></span>${TABS.map(([k, label]) => `<button data-tab="${k}">${label}</button>`).join("")}</div>
   <div id="view"><div id="content">

@@ -64,6 +64,26 @@ fn log(msg: String) {
     }
 }
 
+/// Keep the window above everything, including a full-screen Ableton and its plugin windows.
+/// alwaysOnTop alone is "floating" level, which sits above ordinary windows but is hidden by a full-screen app's
+/// own Space. So: status window level (above floating palettes and plugin windows), allowed to join every Space,
+/// and allowed to share a full-screen app's Space ("full screen auxiliary").
+#[cfg(target_os = "macos")]
+fn float_above_everything(window: &tauri::WebviewWindow) {
+    use objc2_app_kit::{NSWindow, NSWindowCollectionBehavior};
+    const STATUS_WINDOW_LEVEL: isize = 25; // NSStatusWindowLevel
+    if let Ok(ptr) = window.ns_window() {
+        // SAFETY: Tauri hands back the live NSWindow of this window; we only call it on the main thread (setup).
+        let ns = unsafe { &*(ptr as *mut NSWindow) };
+        ns.setLevel(STATUS_WINDOW_LEVEL);
+        ns.setCollectionBehavior(
+            NSWindowCollectionBehavior::CanJoinAllSpaces
+                | NSWindowCollectionBehavior::FullScreenAuxiliary
+                | NSWindowCollectionBehavior::IgnoresCycle,
+        );
+    }
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -92,6 +112,11 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon
 
             *app.state::<Service>().0.lock().unwrap() = start_service();
+
+            #[cfg(target_os = "macos")]
+            if let Some(w) = app.get_webview_window("main") {
+                float_above_everything(&w);
+            }
 
             let show = MenuItem::with_id(app, "show", "Show Similar Sound", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;

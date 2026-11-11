@@ -49,11 +49,14 @@ function resultHtml(r: Comparison) {
     return `<div class="gap ${g.outside ? "out" : ""}" style="--i:${i}"><span class="dir">${g.delta < 0 ? "↓" : "↑"}</span><div class="gt"><div class="gl">${esc(label)}</div><div class="gv">${esc(rest.join(": "))}</div></div></div>`;
   }).join("");
   return `<div class="cmp-head rise">Compared with <b>${esc(r.reference)}</b></div>
+    <div class="cmp-links rise" style="--i:1">
+      <button class="linkrow" data-rechoose>Compare to a different collection or song →</button>
+      <button class="linkrow" data-again>Listen to my project again →</button>
+    </div>
     ${r.small ? `<div class="answer notice rise" style="--i:1">${esc(r.note)}</div>` : ""}
     ${feelHtml(r.feel, r.why ?? {})}
     <div class="section">Where your project differs</div><div class="gaps">${rows}</div>
-    ${askSection("Ask about this comparison", "e.g. What should I fix first?")}
-    <div style="margin-top:12px"><button class="btn ghost small" data-again>Listen again</button></div>`;
+    ${askSection("Ask about this comparison", "e.g. What should I fix first?")}`;
 }
 
 function renderPhase(l: Listen) {
@@ -98,6 +101,9 @@ export function mountCompare(el: HTMLElement) {
         phase = "result";
         renderPhase(S.listen!);
       });
+    } else if (t.closest("[data-rechoose]")) {
+      result = null; phase = "";                 // the project is still heard: go back to choosing what to compare with
+      tick();
     } else if (t.closest("[data-again],[data-retry]")) {
       result = null; phase = "";
       run(async () => { apply(await api.listenStart()); });
