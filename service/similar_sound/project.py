@@ -1,6 +1,7 @@
-"""Analyse audio captured from the user's project: the same measurements as a library song, minus the
-hunt for a drop (they played the section they care about) and minus embeddings (nothing to search).
-The audio is deleted by the caller; only this document is kept."""
+"""Analyse audio captured from the user's project: the same measurements and vibe vectors as a library song,
+minus the hunt for a drop (they played the section they care about). The audio is deleted by the caller;
+only the measurements are kept (the vectors stay in memory for the comparison).
+"""
 from __future__ import annotations
 
 from pathlib import Path
@@ -8,7 +9,7 @@ from pathlib import Path
 import librosa
 import numpy as np
 
-from . import config, features, segment, stems
+from . import config, embed, features, segment, stems
 
 SILENCE = 10 ** (-50 / 20)   # -50 dBFS: below this is not music
 MIN_SECONDS = 4.0
@@ -19,7 +20,7 @@ class ProjectError(Exception):
     """Carries the sentence to show the user."""
 
 
-def analyse(wav: Path) -> dict:
+def analyse(wav: Path) -> tuple[dict, dict[str, np.ndarray]]:
     y, _ = librosa.load(str(wav), sr=config.STEM_SR, mono=False)
     y = y if y.ndim == 2 else np.stack([y, y])
     loud = np.flatnonzero(np.abs(y).max(axis=0) > SILENCE)
@@ -37,4 +38,10 @@ def analyse(wav: Path) -> dict:
     parts = stems.split(y)
     doc = features.extract(y, parts, bpm, None)
     doc.update(kind="project", title="Your project", artist="", seconds=round(y.shape[1] / config.STEM_SR, 1))
-    return doc
+    # The same vibe vectors a library song has, so the feel of the project can be measured against theirs.
+    vectors = {"mix": embed.embed(y, config.STEM_SR)}
+    for name in ("drums", "bass", "other"):
+        vectors[name] = embed.embed(parts[name], config.STEM_SR)
+    if not doc["groove"].get("empty"):
+        vectors["groove"] = np.array(doc["groove"]["vector"], dtype=np.float32)
+    return doc, vectors

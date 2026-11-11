@@ -66,7 +66,7 @@ class Store:
         for r in self.execute("SELECT id,source,title,artist,doc FROM tracks ORDER BY created DESC"):
             d = json.loads(r["doc"])
             out.append({"id": r["id"], "title": r["title"], "artist": r["artist"], "source": r["source"],
-                        "bpm": d.get("bpm"), "key": d.get("key")})
+                        "bpm": d.get("bpm"), "key": d.get("key"), "key_alternatives": d.get("key_alternatives", [])})
         return out
 
     def vector(self, track_id: str, kind: str) -> np.ndarray | None:

@@ -5,7 +5,7 @@ export type JobStatus = "pending" | "running" | "done" | "error" | "needs_timest
 export interface Job { id: number; source: string; status: JobStatus; stage: string; error: string | null; title: string | null; artist: string | null; track_key: string }
 export type QueueState = "idle" | "working" | "paused_ableton" | "paused_user";
 export interface Status { state: QueueState; jobs: Job[] }
-export interface TrackSummary { id: string; title: string; artist: string; source: string; bpm: number | null; key: string | null }
+export interface TrackSummary { id: string; title: string; artist: string; source: string; bpm: number | null; key: string | null; key_alternatives?: string[] }
 export interface TrackDoc extends TrackSummary {
   segments: { build: [number, number]; drop: [number, number] };
   alternative_drops: number[];
@@ -16,9 +16,15 @@ export interface Provider { id: string; name: string; needs_address: boolean }
 export interface Similar { id: string; score: number; title: string }
 export interface Collection { id: number; name: string; track_ids: string[] }
 export type ListenState = "idle" | "waiting" | "listening" | "analysing" | "ready" | "error";
-export interface Listen { state: ListenState; level: number; seconds: number; message: string; ableton_running: boolean; heard: { bpm: number; key: string | null; seconds: number | null } | null }
+export interface Listen { state: ListenState; level: number; seconds: number; message: string; ableton_running: boolean; heard: { bpm: number; key: string | null; key_alternatives?: string[]; seconds: number | null } | null }
 export interface Gap { label: string; yours: number; reference: number; delta: number; outside: boolean; n: number; text: string }
-export interface Comparison { reference: string; n: number; is_collection: boolean; small: boolean; note: string; references: string[]; gaps: Gap[] }
+export interface FeelAspect { kind: string; label: string; score: number; typical: number | null; gap: number | null; pairs: number; scope: string | null;
+  closest: { title: string; score: number } | null; furthest: { title: string; score: number } | null }
+export interface Feel { aspects: FeelAspect[]; weakest: string | null; pairs: number; reliable: boolean; note: string }
+export interface Why { label: string; text: string; delta: number; outside: boolean }
+export interface Comparison { reference: string; n: number; is_collection: boolean; small: boolean; note: string; references: string[]; gaps: Gap[];
+  feel?: Feel; why: Record<string, Why[]> }
+export interface Turn { q: string; a: string }
 
 /** A failure with the sentence to show; `code` lets the UI react (e.g. ask for the Gemini key). */
 export class ApiError extends Error {
@@ -54,7 +60,7 @@ export const api = {
   tracks: () => call<TrackSummary[]>("/tracks"),
   track: (id: string) => call<TrackDoc>(`/tracks/${id}`),
   similar: (id: string, kind = "groove") => call<Similar[]>(`/tracks/${id}/similar?kind=${kind}`),
-  ask: (id: string, question: string) => post<{ answer: string }>(`/tracks/${id}/ask`, { question }),
+  ask: (id: string, question: string, history: Turn[] = []) => post<{ answer: string }>(`/tracks/${id}/ask`, { question, history }),
   // the API key (any company): sent once, stored in the Keychain by the service, never read back
   llm: () => call<LlmSummary>("/settings"),
   saveKey: (body: { key: string; provider?: string; base_url?: string; model?: string }) => post<LlmSummary>("/settings/llm", body),
@@ -71,5 +77,5 @@ export const api = {
   listenStart: () => post<Listen>("/listen/start"),
   listenCancel: () => post<Listen>("/listen/cancel"),
   compare: (kind: "track" | "collection", id: string | number) => post<Comparison>("/compare", { kind, id }),
-  askCompare: (question: string) => post<{ answer: string }>("/compare/ask", { question }),
+  askCompare: (question: string, history: Turn[] = []) => post<{ answer: string }>("/compare/ask", { question, history }),
 };

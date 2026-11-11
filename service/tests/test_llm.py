@@ -94,7 +94,7 @@ def test_input_is_capped_for_every_company(tmp_path):
         seen = {}
         client(tmp_path, recording(payload, seen), provider).complete("s", "Q" * 100_000)
         body = json.dumps(seen["body"])
-        assert body.count("Q") == llm.MAX_INPUT_CHARS, provider
+        assert llm.MAX_INPUT_CHARS - 5 <= body.count("Q") <= llm.MAX_INPUT_CHARS, provider
 
 
 def test_daily_call_limit_stops_spend(tmp_path, monkeypatch):
@@ -294,3 +294,43 @@ def test_no_key_message_is_the_one_the_user_asked_for():
     with pytest.raises(llm.NoKey) as e:
         llm.Client(None, creds=lambda: None).complete("s", "p")
     assert str(e.value) == "You need to add your own AI API key using the key icon in the top left"
+
+
+# ---------- conversations: every company's turn format, and a hard budget ----------
+HIST = (("user", "first?"), ("assistant", "one."), ("user", "second?"), ("assistant", "two."))
+
+
+def test_gemini_turns_use_model_not_assistant(tmp_path):
+    seen = {}
+    client(tmp_path, recording(GEMINI_OK, seen)).complete("sys", "third?", HIST)
+    assert [(m["role"], m["parts"][0]["text"]) for m in seen["body"]["contents"]] == [
+        ("user", "first?"), ("model", "one."), ("user", "second?"), ("model", "two."), ("user", "third?")]
+
+
+def test_anthropic_and_openai_turns(tmp_path):
+    seen = {}
+    client(tmp_path, recording(ANTHROPIC_OK, seen), "anthropic").complete("sys", "third?", HIST)
+    assert [m["role"] for m in seen["body"]["messages"]] == ["user", "assistant", "user", "assistant", "user"] and seen["body"]["system"] == "sys"
+    client(tmp_path, recording(OPENAI_OK, seen), "openai").complete("sys", "third?", HIST)
+    assert [m["role"] for m in seen["body"]["messages"]] == ["system", "user", "assistant", "user", "assistant", "user"]
+
+
+def test_the_budget_drops_the_oldest_turns_first_and_never_exceeds_the_cap():
+    big = "x" * 2500
+    hist = tuple(item for i in range(10) for item in (("user", f"q{i} " + big), ("assistant", f"a{i} " + big)))
+    system, kept, prompt = llm._budget("S" * 8000, hist, "the new question " + "q" * 50_000)
+    total = len(system) + sum(len(t) for _, t in kept) + len(prompt)
+    assert total <= llm.MAX_INPUT_CHARS
+    assert len(kept) <= 2 * llm.MAX_HISTORY_TURNS and kept[0][0] == "user" and kept[-1][1].startswith("a9")   # newest kept
+    assert not any(t.startswith("q0") for _, t in kept)                                                       # oldest dropped
+    assert prompt.startswith("the new question")
+
+
+def test_a_long_turn_is_trimmed():
+    system, kept, prompt = llm._budget("s", (("user", "u" * 10_000), ("assistant", "a")), "p")
+    assert len(kept[0][1]) == llm.MAX_TURN_CHARS
+
+
+def test_history_must_start_with_the_user():
+    system, kept, prompt = llm._budget("s", (("assistant", "orphan"), ("user", "q"), ("assistant", "a")), "p")
+    assert [r for r, _ in kept] == ["user", "assistant"]

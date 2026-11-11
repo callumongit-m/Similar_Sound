@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -16,7 +17,7 @@ import time
 from pathlib import Path
 from typing import Callable, Iterator, Protocol
 
-from . import ableton, project
+from . import ableton, config, project
 from .store import Store
 
 PLAYING = 0.004          # rms (about -48 dBFS) above which Ableton counts as playing
@@ -99,6 +100,7 @@ class Listener:
         self._heard_levels = False
         self.project_id: int | None = None
         self.project: dict | None = None
+        self.vectors: dict = {}              # the project's vibe vectors, in memory only
 
     # --- public ---
     def start(self) -> None:
@@ -125,7 +127,8 @@ class Listener:
         self._finish(path)
 
     def status(self) -> dict:
-        heard = ({"bpm": self.project["bpm"], "key": self.project.get("key"), "seconds": self.project.get("seconds")}
+        heard = ({"bpm": self.project["bpm"], "key": self.project.get("key"),
+                  "key_alternatives": self.project.get("key_alternatives", []), "seconds": self.project.get("seconds")}
                  if self.project else None)
         return {"state": self.state, "level": round(self.level, 3), "seconds": round(self.seconds, 1),
                 "message": self.message, "ableton_running": self._running(), "project_id": self.project_id,
@@ -158,7 +161,10 @@ class Listener:
             self.state, self.message = "error", "Something went wrong while listening. Try again."
         finally:
             try:
-                wav.unlink(missing_ok=True)                  # the audio is never kept
+                keep = config.DATA_DIR / "keep_capture"      # opt-in, for debugging: `touch ~/.similar_sound/keep_capture`
+                if keep.exists() and wav.exists():
+                    shutil.copy(wav, config.DATA_DIR / "last_capture.wav")
+                wav.unlink(missing_ok=True)                  # otherwise the audio is never kept
                 wav.parent.rmdir()
             except OSError:
                 pass
@@ -195,7 +201,8 @@ class Listener:
 
     def _finish(self, wav: Path) -> None:
         self.state = "analysing"
-        doc = self._analyse(wav)
+        result = self._analyse(wav)
+        doc, self.vectors = result if isinstance(result, tuple) else (result, {})
         self._store.execute("INSERT INTO projects(created, doc) VALUES (?, ?)", (time.time(), json.dumps(doc)))
         self.project_id = self._store.execute("SELECT max(id) AS i FROM projects")[0]["i"]
         self.project, self.state, self.message = doc, "ready", ""

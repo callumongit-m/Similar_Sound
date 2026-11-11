@@ -11,7 +11,7 @@ from pathlib import Path
 
 from dataclasses import asdict
 
-from . import ableton, coach, config, keychain, library, listen, llm, pipeline
+from . import ableton, coach, config, keychain, library, listen, llm, pipeline, similarity
 from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
@@ -25,8 +25,21 @@ class Timestamp(BaseModel):
     timestamp: str  # "3:04" or seconds
 
 
+class Turn(BaseModel):
+    q: str
+    a: str
+
+
 class Question(BaseModel):
     question: str
+    history: list[Turn] = []      # earlier question/answer pairs of this conversation (the window keeps them; the service is stateless)
+
+
+def _history(turns: list[Turn]) -> tuple:
+    out: list[tuple[str, str]] = []
+    for t in turns[-llm.MAX_HISTORY_TURNS:]:
+        out += [("user", t.q), ("assistant", t.a)]
+    return tuple(out)
 
 
 class Bounce(BaseModel):
@@ -141,7 +154,7 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     def ask(track_id: str, body: Question):
         if store.get(track_id) is None:
             raise HTTPException(404)
-        return {"answer": llm_call(lambda g: coach.ask(store, g, track_id, body.question))}
+        return {"answer": llm_call(lambda g: coach.ask(store, g, track_id, body.question, _history(body.history)))}
 
     # ---- the API key: any company's. It goes straight into the Keychain and is never returned, logged or
     # kept in a file; the window only ever learns which company and model are connected. ----
@@ -247,6 +260,9 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
             else:
                 raise HTTPException(400, "Compare against a song or a collection.")
             result = coach.compare_project(listener.project, refs, name, is_collection)
+            if listener.vectors:       # how it *feels*, from the vibe vectors, alongside the measured differences
+                result["feel"] = similarity.closeness(store, listener.vectors, [d["id"] for d in refs],
+                                                      {d["id"]: d.get("title") or d["id"] for d in refs})
         except ValueError as e:
             raise HTTPException(400, str(e))
         comparison.update(result)
@@ -256,6 +272,6 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     def compare_ask(body: Question):
         if not comparison or listener.project is None:
             raise HTTPException(409, "Compare your project with something first.")
-        return {"answer": llm_call(lambda g: coach.ask_about_comparison(g, listener.project, dict(comparison), body.question))}
+        return {"answer": llm_call(lambda g: coach.ask_about_comparison(g, listener.project, dict(comparison), body.question, _history(body.history)))}
 
     return app

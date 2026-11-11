@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from similar_sound import listen, project
+from similar_sound import features, listen, project
 from similar_sound.store import Store
 from tests.synth import SR, sectioned
 
@@ -158,8 +158,11 @@ def _wav(tmp_path, seconds_of_music=14, lead_silence=2.0, tail_silence=1.0):
     return p
 
 
-def test_project_analysis_measures_the_stems_and_groove_without_hunting_for_a_drop(tmp_path):
-    doc = project.analyse(_wav(tmp_path))
+def test_project_analysis_measures_the_stems_and_groove_without_hunting_for_a_drop(tmp_path, monkeypatch):
+    monkeypatch.setattr(project.embed, "embed", lambda audio, sr: np.ones(512, dtype=np.float32) / 22.6)   # CLAP is covered elsewhere
+    doc, vectors = project.analyse(_wav(tmp_path))
+    assert set(vectors) == {"mix", "drums", "bass", "other", "groove"}                 # the same vibe vectors a library song has
+    assert len(vectors["groove"]) == features.GROOVE_DIM
     assert doc["kind"] == "project" and abs(doc["bpm"] - 124) < 1.5
     assert set(doc["stems"]) == {"drums", "bass", "other"}
     assert doc["arrangement"] is None                                   # nothing to compare build vs drop on
@@ -196,3 +199,32 @@ def test_levels_heard_but_an_empty_recording_is_reported_as_our_bug_not_yours(tm
     lst.start()
     assert wait(lambda: lst.state == "error")
     assert "my recording came out empty" in lst.message and "service.log" in lst.message
+
+
+def test_the_projects_vibe_vectors_are_kept_in_memory_for_the_comparison(tmp_path):
+    vecs = {"mix": np.ones(4, dtype=np.float32)}
+    lst, s, made = make(tmp_path, [script_tap(steps((0.1, 10), (0.0, 3)))], analyse=lambda wav: ({"kind": "project", "bpm": 124}, vecs))
+    lst.start()
+    assert wait(lambda: lst.state == "ready")
+    assert lst.vectors is vecs and lst.project["bpm"] == 124
+    lst.cancel()
+    assert lst.vectors == {}                                          # forgotten with the rest when you listen again
+
+
+def test_the_capture_is_kept_only_when_you_opt_in(tmp_path, monkeypatch):
+    from similar_sound import config
+    monkeypatch.setattr(config, "DATA_DIR", tmp_path / "data")
+    (tmp_path / "data").mkdir()
+    def analyse(wav):
+        wav.write_bytes(b"RIFFfake")
+        return {"kind": "project", "bpm": 120}
+    lst, s, made = make(tmp_path, [script_tap(steps((0.1, 10), (0.0, 3)))], analyse=analyse)
+    lst.start()
+    assert wait(lambda: lst.state == "ready")
+    time.sleep(0.2)
+    assert not (tmp_path / "data" / "last_capture.wav").exists()           # default: never kept
+    (tmp_path / "data" / "keep_capture").touch()
+    lst2, s2, made2 = make(tmp_path / "..", [script_tap(steps((0.1, 10), (0.0, 3)))], analyse=analyse)
+    lst2.start()
+    assert wait(lambda: lst2.state == "ready")
+    assert wait(lambda: (tmp_path / "data" / "last_capture.wav").exists())  # opted in: kept for debugging

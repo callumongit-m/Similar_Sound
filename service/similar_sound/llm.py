@@ -20,7 +20,9 @@ from . import keychain
 from .providers import PROVIDERS, Provider, detect
 
 MAX_OUTPUT_TOKENS = 700
-MAX_INPUT_CHARS = 24_000     # about 6k tokens: a track's whole analysis fits well inside this
+MAX_INPUT_CHARS = 24_000     # about 6k tokens, shared by the instructions + data, the history and the new question
+MAX_HISTORY_TURNS = 6        # earlier question/answer pairs sent along with a follow-up; older ones are dropped
+MAX_TURN_CHARS = 3_000       # and each is trimmed, so a long conversation can't make every question expensive
 DAILY_CALL_LIMIT = 150
 OUT_OF_CREDITS = "I need more token credits"
 
@@ -57,8 +59,11 @@ def save_creds(creds: "Creds") -> None:
     keychain.set(asdict(creds))
 
 
+History = "tuple[tuple[str, str], ...]"   # (("user", question), ("assistant", answer), ...) oldest first
+
+
 class LLM(Protocol):
-    def complete(self, system: str, prompt: str) -> str: ...
+    def complete(self, system: str, prompt: str, history: tuple = ()) -> str: ...
 
 
 def stored_creds() -> Creds | None:
@@ -74,21 +79,23 @@ def _base(c: Creds) -> str:
 
 
 # ---------------------------------------------------------------- wire formats
-def _request(c: Creds, system: str, prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> urllib.request.Request:
+def _request(c: Creds, system: str, prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS, history: tuple = ()) -> urllib.request.Request:
     kind, base, h = PROVIDERS[c.provider].kind, _base(c), {"Content-Type": "application/json"}
     if kind == "gemini":
         h["x-goog-api-key"] = c.key
         body = {"systemInstruction": {"parts": [{"text": system}]},
-                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "contents": [{"role": "model" if r == "assistant" else "user", "parts": [{"text": t}]} for r, t in history]
+                            + [{"role": "user", "parts": [{"text": prompt}]}],
                 "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3}}
         return urllib.request.Request(f"{base}/models/{c.model}:generateContent", json.dumps(body).encode(), h)
     if kind == "anthropic":
         h.update({"x-api-key": c.key, "anthropic-version": "2023-06-01"})
         body = {"model": c.model, "max_tokens": max_tokens, "temperature": 0.3, "system": system,
-                "messages": [{"role": "user", "content": prompt}]}
+                "messages": [{"role": r, "content": t} for r, t in history] + [{"role": "user", "content": prompt}]}
         return urllib.request.Request(f"{base}/messages", json.dumps(body).encode(), h)
     h["Authorization"] = f"Bearer {c.key}"
-    body = {"model": c.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
+    body = {"model": c.model, "messages": [{"role": "system", "content": system}]
+            + [{"role": r, "content": t} for r, t in history] + [{"role": "user", "content": prompt}]}
     if c.provider == "openai":   # OpenAI's newer models reject max_tokens, and reasoning models reject temperature
         body["max_completion_tokens"] = max_tokens
         if not c.model.startswith(("gpt-5", "o1", "o3", "o4")):
@@ -161,6 +168,23 @@ def _call(opener: Callable, req: urllib.request.Request, timeout: int = 60) -> d
         raise LLMError("I can't reach the model right now. Check your connection.") from None
 
 
+def _budget(system: str, history: tuple, prompt: str) -> tuple[str, tuple, str]:
+    """Keep what is sent inside MAX_INPUT_CHARS: the instructions + data first, then the most recent turns,
+    then the new question. Spend can't grow just because a conversation does."""
+    system = system[:MAX_INPUT_CHARS]
+    room = MAX_INPUT_CHARS - len(system)
+    kept: list[tuple[str, str]] = []
+    for role, text in reversed(history[-2 * MAX_HISTORY_TURNS:]):          # newest first, so the oldest are what is dropped
+        text = text[:MAX_TURN_CHARS]
+        if len(text) > room:
+            break
+        kept.append((role, text)); room -= len(text)
+    kept.reverse()
+    while kept and kept[0][0] != "user":                                      # a conversation must start with the user
+        kept.pop(0)
+    return system, tuple(kept), prompt[:max(room, 0)]
+
+
 # ---------------------------------------------------------------- the client
 class Client:
     def __init__(self, store=None, creds: Callable[[], Creds | None] = stored_creds, opener: Callable = urllib.request.urlopen,
@@ -177,14 +201,14 @@ class Client:
             raise LLMError(f"That's the daily limit of {DAILY_CALL_LIMIT} questions. It resets tomorrow.", "daily_limit")
         self._store.execute("INSERT INTO usage(day,calls) VALUES(?,1) ON CONFLICT(day) DO UPDATE SET calls=calls+1", (day,))
 
-    def complete(self, system: str, prompt: str) -> str:
+    def complete(self, system: str, prompt: str, history: tuple = ()) -> str:
         c = self._creds()
         if not c:
             raise NoKey()
         self._count_call()
-        prompt = prompt[:MAX_INPUT_CHARS]
+        system, history, prompt = _budget(system, history, prompt)
         try:
-            return self._ask(c, system, prompt)
+            return self._ask(c, system, prompt, history)
         except LLMError as e:
             if e.code != "bad_model":
                 raise
@@ -192,10 +216,10 @@ class Client:
         # right now, remember it, and try once more: a key never stops working because a model name aged.
         c = connect(c.key, c.provider, c.base_url, None, self._open)
         self._save(c)
-        return self._ask(c, system, prompt)
+        return self._ask(c, system, prompt, history)
 
-    def _ask(self, c: Creds, system: str, prompt: str) -> str:
-        data = _call(self._open, _request(c, system, prompt))
+    def _ask(self, c: Creds, system: str, prompt: str, history: tuple = ()) -> str:
+        data = _call(self._open, _request(c, system, prompt, history=history))
         try:
             return _answer(c, data)
         except (KeyError, IndexError, StopIteration):

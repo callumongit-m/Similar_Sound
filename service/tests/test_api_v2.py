@@ -23,17 +23,21 @@ class FakeKeys:
 
 class SpyLLM:
     def __init__(self): self.calls = []
-    def complete(self, system, prompt):
-        self.calls.append((system, prompt)); return "an answer"
+    def complete(self, system, prompt, history=()):
+        self.calls.append((system + "\n\n" + prompt, prompt, history)); return "an answer"
 
 
 @pytest.fixture
 def env(tmp_path):
     store = Store(tmp_path / "v.db")
     d = make_doc(tid="ref1"); d["title"] = "Temptation"; d["groove"] = features.groove(drums(swing=0.0), 124)
-    store.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
+    kinds = ("mix", "groove", "drums", "bass", "other")
+    store.add(d, {k: np.random.default_rng(i).standard_normal(16).astype(np.float32) for i, k in enumerate(kinds)})
+    d2 = make_doc(tid="ref2"); d2["title"] = "Free"; d2["groove"] = d["groove"]
+    store.add(d2, {k: np.random.default_rng(50 + i).standard_normal(16).astype(np.float32) for i, k in enumerate(kinds)})
     project = make_doc(lufs=-16, tid="proj"); project["groove"] = d["groove"]; project["kind"] = "project"; project["seconds"] = 20
-    lst = listen.Listener(store, make_tap=lambda w: None, ableton_running=lambda: True, analyse=lambda w: project)
+    pvec = {k: np.random.default_rng(99 + i).standard_normal(16).astype(np.float32) for i, k in enumerate(kinds)}
+    lst = listen.Listener(store, make_tap=lambda w: None, ableton_running=lambda: True, analyse=lambda w: (project, pvec))
     keys, spy = FakeKeys(), SpyLLM()
     state = {"gem": lambda: spy}
     def connect(key, provider=None, base_url=None, model=None):
@@ -80,7 +84,7 @@ def test_ask_failures_carry_the_exact_sentence_and_a_code(env):
     r = c.post("/tracks/ref1/ask", json={"question": "hi"})
     assert r.status_code == 503 and r.json()["detail"]["code"] == "no_key"
     class Broke:
-        def complete(self, s, p): raise llm.OutOfCredits()
+        def complete(self, s, p, h=()): raise llm.OutOfCredits()
     state["gem"] = lambda: Broke()
     r = c.post("/tracks/ref1/ask", json={"question": "hi"})
     assert r.json()["detail"] == {"message": "I need more token credits", "code": "credits"}
@@ -100,7 +104,7 @@ def test_collections_round_trip(env):
     c.delete(f"/collections/{cid}/tracks/ref1")
     assert c.get("/collections").json()[0]["track_ids"] == []
     c.delete(f"/collections/{cid}")
-    assert c.get("/collections").json() == [] and len(c.get("/tracks").json()) == 1          # song survives
+    assert c.get("/collections").json() == [] and len(c.get("/tracks").json()) == 2          # songs survive
 
 
 # ---------- project + compare ----------
@@ -120,13 +124,28 @@ def test_compare_against_a_song_and_a_collection_then_ask_about_it(env):
     assert c.get("/listen").json()["heard"]["bpm"] == 124
     one = c.post("/compare", json={"kind": "track", "id": "ref1"}).json()
     assert one["reference"] == "Temptation" and one["small"] is False and one["gaps"][0]["n"] == 1
+    assert [a["label"] for a in one["feel"]["aspects"]] == ["Overall vibe", "Groove", "Drums", "Bass", "Synths"]
+    assert set(one["why"]) == {"mix", "groove", "drums", "bass", "other"}               # the measured reasons behind each aspect
     cid = c.post("/collections", json={"name": "UK minimal"}).json()["id"]
     c.post(f"/collections/{cid}/tracks", json={"track_id": "ref1"})
     many = c.post("/compare", json={"kind": "collection", "id": cid}).json()
     assert many["is_collection"] and many["small"] is True and "rough guide" in many["note"]
     assert c.post("/compare/ask", json={"question": "what is weakest?"}).json() == {"answer": "an answer"}
-    system, prompt = spy.calls[-1]
+    prompt, question, history = spy.calls[-1]
     assert "work-in-progress" in prompt and "UK minimal" in prompt and "what is weakest?" in prompt
+    assert "HOW IT FEELS" in prompt and "closeness_0_to_100" in prompt and "typical_for_the_references" in prompt   # the LLM is told the feel scores
+
+
+def test_the_feel_of_a_two_song_collection_is_measured_against_their_own_spread(env):
+    c, store, keys, spy, state = env
+    _hear(c)
+    cid = c.post("/collections", json={"name": "Both"}).json()["id"]
+    for t in ("ref1", "ref2"):
+        c.post(f"/collections/{cid}/tracks", json={"track_id": t})
+    feel = c.post("/compare", json={"kind": "collection", "id": cid}).json()["feel"]
+    a = feel["aspects"][0]
+    assert a["scope"] == "these songs" and a["pairs"] == 1 and feel["reliable"] is False and "rough guide" in feel["note"]
+    assert a["closest"] and a["furthest"] and {a["closest"]["title"], a["furthest"]["title"]} <= {"Temptation", "Free"}
 
 
 def test_compare_edge_cases(env):
@@ -146,3 +165,17 @@ def test_starting_a_new_listen_forgets_the_old_comparison(env):
     c.post("/compare", json={"kind": "track", "id": "ref1"})
     c.post("/listen/cancel")
     assert c.post("/compare/ask", json={"question": "x"}).status_code == 409
+
+
+def test_a_follow_up_sends_the_earlier_turns_and_only_the_recent_ones(env):
+    c, store, keys, spy, state = env
+    turns = [{"q": f"question {i}", "a": f"answer {i}"} for i in range(10)]
+    c.post("/tracks/ref1/ask", json={"question": "and now?", "history": turns})
+    prompt, question, history = spy.calls[-1]
+    assert question == "and now?"
+    assert len(history) == 2 * llm.MAX_HISTORY_TURNS                              # only the most recent turns travel
+    assert history[0] == ("user", "question 4") and history[-1] == ("assistant", "answer 9")
+    _hear(c)
+    c.post("/compare", json={"kind": "track", "id": "ref1"})
+    c.post("/compare/ask", json={"question": "go on", "history": turns[:2]})
+    assert spy.calls[-1][2] == (("user", "question 0"), ("assistant", "answer 0"), ("user", "question 1"), ("assistant", "answer 1"))

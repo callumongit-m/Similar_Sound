@@ -17,8 +17,9 @@ def doc(swing=0.0, lufs=-8.0, tid="a"):
 
 
 class EchoLLM:
-    def complete(self, system, prompt):
-        self.prompt = prompt
+    def complete(self, system, prompt, history=()):
+        self.system, self.history = system, history
+        self.prompt = system + "\n\n" + prompt          # the data now travels in the standing instructions, the question is the turn
         return "ok"
 
 
@@ -98,8 +99,8 @@ def _walk(x):
 
 def test_what_the_llm_is_sent_contains_the_stems_and_their_labels():
     class Spy:
-        def complete(self, system, prompt):
-            self.system, self.prompt = system, prompt
+        def complete(self, system, prompt, history=()):
+            self.system, self.prompt, self.history = system, prompt, history
             return "ok"
     from similar_sound.store import Store
     import tempfile, pathlib
@@ -109,13 +110,13 @@ def test_what_the_llm_is_sent_contains_the_stems_and_their_labels():
     s.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
     spy = Spy()
     coach.ask(s, spy, "a", "how loud is the bass stem?")
-    assert '"bass":{"loudness_dB"' in spy.prompt and "sub (20-60 Hz)" in spy.prompt
-    assert "never invent a measurement" in spy.system
+    assert '"bass":{"loudness_dB"' in spy.system and "sub (20-60 Hz)" in spy.system
+    assert "never invent a measurement" in spy.system and spy.prompt == "how loud is the bass stem?"
 
 
 def test_a_reference_song_is_explained_not_coached():
     class Spy:
-        def complete(self, system, prompt): self.prompt = prompt; return "ok"
+        def complete(self, system, prompt, history=()): self.prompt = system + prompt; return "ok"
     import tempfile, pathlib
     from similar_sound.store import Store
     s = Store(pathlib.Path(tempfile.mkdtemp()) / "c.db")
@@ -124,3 +125,16 @@ def test_a_reference_song_is_explained_not_coached():
     spy = Spy()
     coach.ask(s, spy, "a", "how loud is the bass?")
     assert "REFERENCE track" in spy.prompt and "not their own project" in spy.prompt and "Answer exactly the question asked" in spy.prompt
+
+
+def test_follow_up_questions_carry_the_conversation_and_the_data_stays_in_the_instructions():
+    spy = EchoLLM()
+    import tempfile, pathlib
+    from similar_sound.store import Store
+    s = Store(pathlib.Path(tempfile.mkdtemp()) / "c.db")
+    d = doc(); d["groove"] = features.groove(drums(swing=0.0), 124)
+    s.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
+    hist = (("user", "how loud is the bass?"), ("assistant", "-14 dB."))
+    coach.ask(s, spy, "a", "and the drums?", hist)
+    assert spy.history == hist and "stems" in spy.system and spy.prompt.endswith("and the drums?")
+    assert "use the conversation so far" in spy.system

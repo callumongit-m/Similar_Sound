@@ -21,6 +21,7 @@ SYSTEM = (
     "one Ableton move to try (device, setting). No jargon without a short explanation. Prioritise the 3 biggest "
     "gaps, not everything. Hedge honestly: groove and sound choice are partly beyond these measurements. "
     "Stems: 'drums', 'bass' and 'other' (synths, leads, pads, vocals: everything that is neither drums nor bass). "
+    "If 'key_could_also_be' is present the key is a close call between those keys: say so rather than naming one. "
     "Quote numbers exactly as given and never invent a measurement that is not in the data. Loudness differences "
     "between an unmastered project and a mastered reference reflect mastering, not mixing: say so."
 )
@@ -126,6 +127,7 @@ def labelled(doc: dict) -> dict:
     a = doc.get("arrangement") or {}
     out = {
         "title": doc.get("title"), "artist": doc.get("artist"), "bpm": doc["bpm"], "key": doc["key"],
+        **({"key_could_also_be": doc["key_alternatives"]} if doc.get("key_alternatives") else {}),
         "full_mix": {"loudness_LUFS": doc["mix"]["lufs"], "crest_factor_dB_higher_is_punchier": doc["mix"]["crest_db"],
                      "spectrum_dB_relative_to_total": bands(doc["mix"]["band_energy_db"]),
                      "stereo_width_0_mono_to_1_wide": dict(zip(WIDTH_RANGES, doc["mix"]["stereo_width"]))},
@@ -154,27 +156,39 @@ def _neighbours(store: Store, track_id: str, k: int) -> list[dict]:
     return out
 
 
-def ask(store: Store, llm: LLM, track_id: str, question: str) -> str:
+def ask(store: Store, llm: LLM, track_id: str, question: str, history: tuple = ()) -> str:
     doc = store.get(track_id)
     if doc is None:
         raise KeyError(track_id)
-    prompt = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
-              "coach them or list fixes unless they ask for that. Answer exactly the question asked, in a few plain "
-              "sentences, quoting the measured numbers. No preamble or disclaimers unless the question needs audio.\n\n"
-              f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
-              f"Closest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}\n\n"
-              f"Question: {question}")
-    return llm.complete(SYSTEM, prompt)
+    context = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
+               "coach them or list fixes unless they ask for that. Answer exactly the question asked, in a few plain "
+               "sentences, quoting the measured numbers. No preamble or disclaimers unless the question needs audio. "
+               "If they ask a follow-up, use the conversation so far.\n\n"
+               f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
+               f"Closest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}")
+    return llm.complete(f"{SYSTEM}\n\n{context}", question, history)
 
 
 SMALL_COLLECTION = 5
+
+
+# which measured differences explain which part of the feel
+ASPECT_GAPS = {"mix": ("Mix ·",), "groove": ("Groove ·",), "drums": ("Drums ·",), "bass": ("Bass ·",), "other": ("Synths/other ·",)}
+
+
+def related_gaps(all_gaps: list[Gap], kind: str, n: int = 3) -> list[dict]:
+    """The biggest measured differences behind one aspect of the feel (already sorted biggest first)."""
+    prefixes = ASPECT_GAPS[kind]
+    return [{"label": g.label, "text": g.text, "delta": g.delta, "outside": g.outside}
+            for g in all_gaps if g.label.startswith(prefixes)][:n]
 
 
 def compare_project(yours: dict, refs: list[dict], ref_name: str, is_collection: bool) -> dict:
     """Deterministic comparison of the captured project against a song or a collection."""
     if not refs:
         raise ValueError("There are no songs in that collection yet.")
-    found = gaps(yours, refs, top=8, ref_name=ref_name)
+    everything = gaps(yours, refs, top=10_000, ref_name=ref_name)
+    found = everything[:8]
     small = is_collection and len(refs) < SMALL_COLLECTION
     return {
         "reference": ref_name, "n": len(refs), "is_collection": is_collection, "small": small,
@@ -182,17 +196,32 @@ def compare_project(yours: dict, refs: list[dict], ref_name: str, is_collection:
                  if small else ""),
         "references": [r.get("title") for r in refs],
         "gaps": [g.__dict__ for g in found],
+        "why": {kind: related_gaps(everything, kind) for kind in ASPECT_GAPS},
     }
 
 
-def ask_about_comparison(llm: LLM, project: dict, comparison: dict, question: str) -> str:
+def ask_about_comparison(llm: LLM, project: dict, comparison: dict, question: str, history: tuple = ()) -> str:
     table = [{"metric": g["label"], "yours": g["yours"], "reference_average": g["reference"],
               "reference_range": [g["low"], g["high"]], "beyond_every_reference_song": g["outside"]}
              for g in comparison["gaps"]]
+    feel = comparison.get("feel")
+    feel_text = ""
+    if feel and feel["aspects"]:
+        rows = [{"aspect": a["label"], "closeness_0_to_100": a["score"], "typical_for_the_references": a["typical"],
+                 "how_much_further_than_typical": a["gap"], "closest": a["closest"], "furthest": a["furthest"]} for a in feel["aspects"]]
+        why = comparison["why"].get(feel["weakest"], []) if feel["weakest"] else []
+        feel_text = ("HOW IT FEELS (measured with audio embeddings, i.e. how a listener hears it, not the numbers below):\n"
+                     f"{json.dumps(rows, ensure_ascii=False)}\n"
+                     "closeness_0_to_100 is how close your project's feel is to the references. It is only meaningful next to "
+                     "'typical_for_the_references', which is how close the reference songs are to each other: "
+                     "'how_much_further_than_typical' above 0 means your project is further from them than they are from one another. "
+                     f"{'The furthest aspect is ' + feel['weakest'] + '. Measured differences behind it: ' + json.dumps([w['text'] for w in why], ensure_ascii=False) if feel['weakest'] else ''}\n"
+                     f"{'' if feel['reliable'] else 'Caveat: ' + feel['note']}\n\n")
     prompt = (f"This is the user's own work-in-progress, captured live from Ableton, compared against "
               f"{comparison['reference']} ({comparison['n']} song(s): {comparison['references']}).\n"
               f"{comparison['note']}\n\n"
               f"Their project, measured:\n{_summary(project)}\n\n"
+              f"{feel_text}"
               f"The biggest measured differences, most important first:\n{json.dumps(table, ensure_ascii=False)}\n\n"
-              f"Question: {question}")
-    return llm.complete(SYSTEM, prompt)
+              "If they ask a follow-up, use the conversation so far.")
+    return llm.complete(f"{SYSTEM}\n\n{prompt}", question, history)

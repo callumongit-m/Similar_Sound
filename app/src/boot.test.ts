@@ -19,7 +19,15 @@ class FakeResizeObserver {
 const T1 = { id: "t1", title: "Temptation", artist: "obp", source: "https://soundcloud.com/obpofficial/temptation-5", bpm: 128, key: "C min" };
 const T2 = { id: "t2", title: "Free", artist: "Joss Dean", source: "https://soundcloud.com/x/free", bpm: 126, key: "A min" };
 const DOC = { ...T1, segments: { build: [120, 150], drop: [150, 180] }, alternative_drops: [], groove: { swing: 0.12 } };
-const GAPS = { reference: "UK minimal", n: 1, is_collection: true, small: true, note: "UK minimal only has 1 song, so treat this as a rough guide.", references: ["Temptation"],
+const FEEL = { weakest: "other", pairs: 1, reliable: false, note: "Add more songs for a sharper read: with only 1 pair of reference songs to measure against, this is a rough guide.",
+  aspects: [
+    { kind: "mix", label: "Overall vibe", score: 80, typical: 82, gap: 2, pairs: 1, scope: "these songs", closest: { title: "Temptation", score: 84 }, furthest: { title: "Free", score: 76 } },
+    { kind: "groove", label: "Groove", score: 70, typical: 77, gap: 7, pairs: 1, scope: "these songs", closest: null, furthest: null },
+    { kind: "drums", label: "Drums", score: 86, typical: 85, gap: -1, pairs: 1, scope: "these songs", closest: null, furthest: null },
+    { kind: "bass", label: "Bass", score: 80, typical: 86, gap: 6, pairs: 1, scope: "these songs", closest: null, furthest: null },
+    { kind: "other", label: "Synths", score: 41, typical: 65, gap: 24, pairs: 1, scope: "these songs", closest: null, furthest: null }] };
+const WHY = { other: [{ label: "Synths/other · top level (dB)", text: "Synths/other · top level (dB): yours -11.9; UK minimal averages -44.7", delta: 33, outside: true }], mix: [], groove: [], drums: [], bass: [] };
+const GAPS = { feel: FEEL, why: WHY, reference: "UK minimal", n: 1, is_collection: true, small: true, note: "UK minimal only has 1 song, so treat this as a rough guide.", references: ["Temptation"],
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
@@ -456,4 +464,115 @@ test("**bold** in an answer is shown bold, with the numbered list kept and nothi
   expect(a.textContent).toContain("**unfinished");                              // an unmatched ** is left alone, not eaten
   expect(a.querySelector("img")).toBeNull();                                    // the reply cannot inject markup
   expect(a.innerHTML).toContain("&lt;img");
+});
+
+
+// ---------------- conversation ----------------
+async function openAsk() {
+  await boot();
+  tab("collections");
+  click($("#unsorted .card.click"));
+  await tick(80);
+}
+const say = async (text: string) => { ($("#detail [data-q]") as HTMLTextAreaElement).value = text; enter($("#detail [data-q]")); await tick(80); };
+const asks = () => W.calls.filter((c) => c.path === "/tracks/t1/ask");
+
+test("a follow-up carries the conversation so far, and the thread keeps every question and answer", async () => {
+  await openAsk();
+  W.answerText = "The bass is -10.75 dB.";
+  await say("how loud is the bass?");
+  W.answerText = "The drums are -10 dB.";
+  await say("and the drums?");
+  expect(asks()[0].body).toEqual({ question: "how loud is the bass?", history: [] });
+  expect(asks()[1].body).toEqual({ question: "and the drums?", history: [{ q: "how loud is the bass?", a: "The bass is -10.75 dB." }] });
+  expect($$("#detail .turn .q").map((q) => q.textContent)).toEqual(["how loud is the bass?", "and the drums?"]);
+  expect($$("#detail .turn .answer").map((a) => a.textContent)).toEqual(["The bass is -10.75 dB.", "The drums are -10 dB."]);
+});
+
+test("a question that failed is shown but is not part of the conversation sent next time", async () => {
+  await openAsk();
+  W.answerText = "First answer.";
+  await say("one");
+  W.askError = { message: "I need more token credits", code: "credits" };
+  await say("two (fails)");
+  expect($$("#detail .turn .answer").map((a) => a.textContent)).toEqual(["First answer.", "I need more token credits"]);
+  W.askError = null; W.answerText = "Third answer.";
+  await say("three");
+  expect(asks()[2].body.history).toEqual([{ q: "one", a: "First answer." }]);        // "two" never got an answer, so it isn't history
+});
+
+test("New conversation starts fresh", async () => {
+  await openAsk();
+  expect($("#detail [data-newchat]").hidden).toBe(true);
+  await say("one");
+  expect($("#detail [data-newchat]").hidden).toBe(false);
+  click($("#detail [data-newchat]"));
+  expect($$("#detail .turn")).toHaveLength(0);
+  expect($("#detail [data-newchat]").hidden).toBe(true);
+  await say("fresh start");
+  expect(asks().at(-1)!.body.history).toEqual([]);
+});
+
+test("pressing Enter twice quickly does not send two overlapping questions", async () => {
+  await openAsk();
+  const q = $("#detail [data-q]") as HTMLTextAreaElement;
+  q.value = "first"; enter(q);
+  q.value = "second, while the first is still thinking"; enter(q);
+  await tick(80);
+  expect(asks()).toHaveLength(1);
+});
+
+// ---------------- how it feels ----------------
+async function compareToCollection() {
+  W.collections = [{ id: 1, name: "UK minimal", track_ids: ["t1"] }];
+  await boot();
+  tab("compare");
+  await tick(80);
+  W.listen = { ...LISTEN, state: "ready", heard: { bpm: 124, key: "A min", seconds: 22 } };
+  await tick(400);
+  click($("#cmp .pick[data-kind='collection']"));
+  await tick(80);
+}
+
+test("the comparison shows how it feels, ranks the furthest aspect and explains it with the measured differences", async () => {
+  await compareToCollection();
+  const rows = $$("#cmp .feelrow");
+  expect(rows.map((r) => r.querySelector(".fr-label")!.textContent)).toEqual(["Overall vibe", "Groove", "Drums", "Bass", "Synths"]);
+  expect(rows.map((r) => r.classList.contains("weak"))).toEqual([false, false, false, false, true]);
+  const weak = rows[4];
+  expect(weak.querySelector(".fr-num")!.textContent).toContain("41");
+  expect(weak.querySelector(".fr-num")!.textContent).toContain("typical 65");
+  expect(weak.textContent).toContain("Furthest from the feel.");
+  expect(weak.textContent).toContain("Synths/other · top level (dB): yours -11.9");
+  expect(weak.querySelector<HTMLElement>(".fill")!.style.getPropertyValue("--v")).toBe("41%");
+  expect(weak.querySelector<HTMLElement>(".tick")!.style.getPropertyValue("--t")).toBe("65%");
+  expect(rows[0].textContent).toContain("closest Temptation 84 · furthest Free 76");
+  expect(rows[2].querySelector(".fr-sub")!.textContent).toBe("as close as typical");                 // -1 is not further than typical
+  expect(rows[1].querySelector(".fr-sub")!.textContent).toBe("7 further than typical");
+});
+
+test("with too few songs the comparison says the read of the feel is rough", async () => {
+  await compareToCollection();
+  expect($("#cmp .feel").previousElementSibling!.textContent).toContain("1 pair of reference songs");
+});
+
+test("how it feels comes before the list of measured differences", async () => {
+  await compareToCollection();
+  const sections = $$("#cmp .section").map((s) => s.textContent);
+  expect(sections.indexOf("How it feels")).toBeLessThan(sections.indexOf("Where your project differs"));
+});
+
+
+// ---------------- key: a close call shows both keys ----------------
+test("a close key call shows both keys on the song and in what the project heard", async () => {
+  W.tracks = [{ ...T1, key: "B min", key_alternatives: ["E min"] }, T2];
+  await boot();
+  tab("collections");
+  expect($$("#unsorted .card").map((c) => [...c.querySelectorAll(".chip")].map((x) => x.textContent).join("|"))).toContain("128 bpm|B min / E min");
+  expect($$("#unsorted .card").map((c) => [...c.querySelectorAll(".chip")].map((x) => x.textContent).join("|"))).toContain("126 bpm|A min");   // a clear key stays single
+  tab("compare");
+  await tick(80);
+  W.listen = { ...LISTEN, state: "ready", heard: { bpm: 124, key: "B min", key_alternatives: ["E min"], seconds: 22 } };
+  await tick(400);
+  expect($("#cmp .cmp-sub").textContent).toContain("B min / E min");
 });
