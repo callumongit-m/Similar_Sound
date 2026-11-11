@@ -1,0 +1,17 @@
+# python
+service/.venv/
+__pycache__/
+.pytest_cache/
+*.pyc
+# app
+app/node_modules/
+app/dist/
+app/src-tauri/target/
+app/src-tauri/gen/
+# data / secrets: audio is never stored in the repo, keys live in ~/.similar_sound
+*.wav
+*.mp3
+*.flac
+.env
+config.json
+.DS_Store
