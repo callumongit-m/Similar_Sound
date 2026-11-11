@@ -187,3 +187,12 @@ def test_ableton_open_but_audio_not_registered_yet_keeps_waiting_instead_of_fail
     assert wait(lambda: lst.status()["message"] == "Waiting for Ableton's audio. Press play.")
     assert lst.state == "waiting"
     assert wait(lambda: lst.state == "ready", t=6)                 # retried, then heard it
+
+
+def test_levels_heard_but_an_empty_recording_is_reported_as_our_bug_not_yours(tmp_path):
+    def silent(wav):
+        raise project.ProjectError("I didn't hear anything. Press play in Ableton and try again.")
+    lst, s, made = make(tmp_path, [script_tap(steps((0.1, 10), (0.0, 3)))], analyse=silent)
+    lst.start()
+    assert wait(lambda: lst.state == "error")
+    assert "my recording came out empty" in lst.message and "service.log" in lst.message

@@ -226,6 +226,10 @@ test("the orb reacts to the level, then asks what to compare with, then shows th
   await tick(400);
   expect($("#cmp .cmp-title").textContent).toBe("Listening");
   expect($("#cmp .orb").style.getPropertyValue("--level")).toBe("0.5");
+  W.listen = { ...W.listen, seconds: 19 };
+  await tick(400);
+  expect($("#cmp .cmp-sub").textContent).toBe("");                                 // no running seconds: it isn't the song's clock
+  expect($("#cmp").textContent).not.toMatch(/\d+s\b/);
   W.collections = [{ id: 1, name: "UK minimal", track_ids: ["t1"] }];
   W.listen = { ...LISTEN, state: "ready", heard: { bpm: 124, key: "A min", seconds: 22 } };
   await tick(400);

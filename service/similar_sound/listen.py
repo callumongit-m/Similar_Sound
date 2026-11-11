@@ -63,8 +63,11 @@ class AbletonTap:
             if len(parts) == 3 and parts[0] == "L":
                 yield float(parts[1]), float(parts[2])
         code = self._p.wait()
+        report = (self._p.stderr.read() or "").strip()
+        if report:
+            print(f"audiotap (exit {code}): " + " | ".join(report.splitlines()[-4:]), flush=True)   # lands in ~/.similar_sound/service.log
         if code not in (0, -2, -15):              # not a normal stop
-            err = (self._p.stderr.read() or "").strip().splitlines()
+            err = report.splitlines()
             if code == 4:
                 raise TapNotReady("Waiting for Ableton's audio. Press play.")
             if code == 3:
@@ -93,6 +96,7 @@ class Listener:
 
     def _reset(self) -> None:
         self.state, self.level, self.seconds, self.message = "idle", 0.0, 0.0, ""
+        self._heard_levels = False
         self.project_id: int | None = None
         self.project: dict | None = None
 
@@ -148,6 +152,8 @@ class Listener:
             self._finish(wav)
         except (TapError, project.ProjectError) as e:
             self.state, self.message = "error", str(e)
+            if self._heard_levels and isinstance(e, project.ProjectError) and str(e).startswith("I didn't hear anything"):
+                self.message = "I could hear Ableton, but my recording came out empty. That's a bug on my side; the details are in ~/.similar_sound/service.log."
         except Exception:                                    # noqa: BLE001
             self.state, self.message = "error", "Something went wrong while listening. Try again."
         finally:
@@ -167,6 +173,7 @@ class Listener:
                     return False
                 self.level, self.seconds, last = min(rms * 6, 1.0), t, t
                 if rms >= PLAYING:
+                    self._heard_levels = True
                     heard_from = t if heard_from is None else heard_from
                     quiet_since = None
                     self.state = "listening"

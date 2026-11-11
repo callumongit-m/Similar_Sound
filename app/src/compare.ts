@@ -41,7 +41,7 @@ function renderPhase(l: Listen) {
   const el = root;
   if (result) { el.innerHTML = resultHtml(result); wireAsk(el, (q) => api.askCompare(q)); }
   else if (l.state === "ready") el.innerHTML = pickerHtml(l);
-  else if (l.state === "listening") el.innerHTML = stage("s-listening", "Listening", `${Math.round(l.seconds)}s`, l.level);
+  else if (l.state === "listening") el.innerHTML = stage("s-listening", "Listening", "", l.level);
   else if (l.state === "analysing") el.innerHTML = stage("s-analysing", "Analysing what I heard");
   else if (l.state === "error") el.innerHTML = `${stage("s-waiting", l.message)}<div style="text-align:center"><button class="btn small" data-retry>Try again</button></div>`;
   else el.innerHTML = stage("s-waiting", "Waiting for audio", l.message || "Press play in Ableton");
@@ -61,7 +61,6 @@ function apply(l: Listen) {
   const o = root.querySelector<HTMLElement>(".orb");
   o?.style.setProperty("--level", String(l.level));
   const sub = root.querySelector<HTMLElement>(".cmp-sub");
-  if (sub && key === "listening") sub.textContent = `${Math.round(l.seconds)}s`;
   if (sub && key === "waiting") sub.textContent = l.message || "Press play in Ableton";
 }
 

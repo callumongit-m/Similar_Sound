@@ -2,6 +2,7 @@
 // virtual audio driver. Used to hear Ableton Live while the user presses play.
 //
 //   audiotap --pid <pid> --out <file.wav> [--max <seconds>]
+//   audiotap --selftest <file.wav>          writes a 1.5 s test tone through the same WAV writer (needs no audio access)
 //
 // stdout: "L <rms> <seconds>" about ten times a second.  Stops on SIGINT/SIGTERM or at --max, then
 // writes a float32 WAV. Exit codes: 0 ok, 2 bad arguments / setup failure, 3 no permission, 4 no such app.
@@ -14,11 +15,40 @@ func die(_ message: String, code: Int32) -> Never {
     exit(code)
 }
 
+// ---- writing the recording
+/// Writes interleaved float32 frames as a WAV. The buffer must be NON-interleaved: AVAudioPCMBuffer exposes
+/// `floatChannelData` only for non-interleaved formats (for interleaved ones it is nil, which once made every
+/// recording silently empty). The file is finalised when this function returns, before the process exits.
+func writeWav(_ data: [Float], channels: Int, sampleRate: Double, to path: String) throws {
+    let frames = data.count / max(channels, 1)
+    guard frames > 0,
+          let format = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                     channels: AVAudioChannelCount(channels), interleaved: false),
+          let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: AVAudioFrameCount(frames)),
+          let planes = buffer.floatChannelData
+    else { throw NSError(domain: "audiotap", code: 1, userInfo: [NSLocalizedDescriptionKey: "nothing to write"]) }
+    buffer.frameLength = AVAudioFrameCount(frames)
+    for ch in 0..<channels { for f in 0..<frames { planes[ch][f] = data[f * channels + ch] } }
+    let settings: [String: Any] = [AVFormatIDKey: kAudioFormatLinearPCM, AVSampleRateKey: sampleRate,
+                                   AVNumberOfChannelsKey: channels, AVLinearPCMBitDepthKey: 32,
+                                   AVLinearPCMIsFloatKey: true, AVLinearPCMIsBigEndianKey: false]
+    let file = try AVAudioFile(forWriting: URL(fileURLWithPath: path), settings: settings,
+                               commonFormat: .pcmFormatFloat32, interleaved: false)
+    try file.write(from: buffer)
+}
+
 // ---- arguments
 var pid: pid_t = 0
 var outPath = ""
 var maxSeconds = 90.0
 var args = Array(CommandLine.arguments.dropFirst())
+if args.first == "--selftest", args.count == 2 {   // exercise the WAV writer alone: a stereo tone, left louder than right
+    let rate = 44100.0
+    var tone = [Float]()
+    for i in 0..<Int(rate * 1.5) { let v = Float(sin(2 * Double.pi * 440 * Double(i) / rate)); tone.append(0.5 * v); tone.append(0.25 * v) }
+    do { try writeWav(tone, channels: 2, sampleRate: rate, to: args[1]); print("selftest wrote \(tone.count / 2) frames"); exit(0) }
+    catch { die("selftest failed: \(error)", code: 2) }
+}
 while !args.isEmpty {
     let flag = args.removeFirst()
     guard !args.isEmpty else { die("missing value for \(flag)", code: 2) }
@@ -93,6 +123,8 @@ guard var format = property(tapID, kAudioTapPropertyFormat, as: AudioStreamBasic
 }
 let channels = Int(format.mChannelsPerFrame)
 let sampleRate = format.mSampleRate
+let nonInterleaved = (format.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+FileHandle.standardError.write("tap format: \(Int(sampleRate)) Hz, \(channels) ch, \(nonInterleaved ? "separate buffers per channel" : "interleaved")\n".data(using: .utf8)!)
 guard format.mFormatID == kAudioFormatLinearPCM, format.mBitsPerChannel == 32, channels > 0 else {
     die("unexpected tap format", code: 2)
 }
@@ -110,16 +142,29 @@ let ioStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregateID, Dispatch
     _, inputData, _, _, _ in
     let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
     lock.lock()
-    for buffer in buffers {
-        guard let data = buffer.mData else { continue }
-        let n = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
-        let floats = data.assumingMemoryBound(to: Float.self)
-        for i in 0..<n {
-            let v = floats[i]
-            windowSumSquares += Double(v * v)
+    if nonInterleaved, buffers.count >= channels, let first = buffers[0].mData {
+        // one buffer per channel: weave them into interleaved frames so everything downstream sees one layout
+        let frames = Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size
+        _ = first
+        if samples.count + frames * channels <= samples.capacity {
+            for f in 0..<frames {
+                for ch in 0..<channels {
+                    let v = buffers[ch].mData!.assumingMemoryBound(to: Float.self)[f]
+                    windowSumSquares += Double(v * v)
+                    samples.append(v)
+                }
+            }
         }
-        windowCount += n
-        if samples.count + n <= samples.capacity { samples.append(contentsOf: UnsafeBufferPointer(start: floats, count: n)) }
+        windowCount += frames * channels
+    } else {
+        for buffer in buffers {
+            guard let data = buffer.mData else { continue }
+            let n = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+            let floats = data.assumingMemoryBound(to: Float.self)
+            for i in 0..<n { let v = floats[i]; windowSumSquares += Double(v * v) }
+            windowCount += n
+            if samples.count + n <= samples.capacity { samples.append(contentsOf: UnsafeBufferPointer(start: floats, count: n)) }
+        }
     }
     lock.unlock()
 }
@@ -163,17 +208,10 @@ func finish() -> Never {
     lock.lock()
     let data = samples
     lock.unlock()
-    guard let wavFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
-                                        channels: AVAudioChannelCount(channels), interleaved: true),
-          let file = try? AVAudioFile(forWriting: URL(fileURLWithPath: outPath), settings: wavFormat.settings,
-                                      commonFormat: .pcmFormatFloat32, interleaved: true),
-          let buffer = AVAudioPCMBuffer(pcmFormat: wavFormat, frameCapacity: AVAudioFrameCount(data.count / channels))
-    else { die("couldn't write the recording", code: 2) }
-    buffer.frameLength = buffer.frameCapacity
-    data.withUnsafeBufferPointer { src in
-        if let dst = buffer.floatChannelData?[0], let base = src.baseAddress { dst.update(from: base, count: data.count) }
-    }
-    do { try file.write(from: buffer) } catch { die("couldn't write the recording: \(error)", code: 2) }
+    do { try writeWav(data, channels: channels, sampleRate: sampleRate, to: outPath) }
+    catch { die("couldn't write the recording: \(error)", code: 2) }
+    let peak = data.reduce(Float(0)) { max($0, abs($1)) }
+    FileHandle.standardError.write("wrote \(data.count / channels) frames, peak \(String(format: "%.4f", peak))\n".data(using: .utf8)!)
     exit(0)
 }
 dispatchMain()
