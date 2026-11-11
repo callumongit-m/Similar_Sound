@@ -3,7 +3,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { api, type Similar, type TrackDoc } from "./api";
 import { askSection, wireAsk } from "./ask";
 import { keyText } from "./songs";
-import { S } from "./state";
 import { $, errorText, esc, restart, run, toast } from "./ui";
 
 export interface DetailHost { onBack(): void; onOpen(id: string): void; onRemove(id: string): void }
@@ -25,12 +24,9 @@ function render(el: HTMLElement, d: TrackDoc, similar: Similar[], host: DetailHo
   const sim = similar.length
     ? `<div class="rise disclosure" style="--i:5"><button class="disc-head" data-disc aria-expanded="false"><span class="chev">›</span><span>Closest groove</span><span class="count">${similar.length}</span></button>
         <div class="disc-body"><div class="disc-inner">${similar.map((s) => `<div class="card click" data-open="${esc(s.id)}"><div class="row"><div class="grow title">${esc(s.title || s.id)}</div><span class="status">${Math.round(s.score * 100)}%</span></div></div>`).join("")}</div></div></div>` : "";
-  // where the song lives, so "why isn't it in Unsorted?" has an answer on screen
-  const homes = S.collections.filter((c) => c.track_ids.includes(d.id)).map((c) => c.name);
   el.innerHTML = `<div class="detail-top"><button class="back" data-back>← Back</button>
       <button class="removebtn" data-remove title="Forget this song so it can be analysed again from scratch">Remove</button></div>
     <div class="rise" style="--i:0"><div class="h1">${esc(d.title)}</div><div class="sub">${esc(d.artist)}</div>
-      <div class="sub where">${homes.length ? `In ${esc(homes.join(", "))}` : "Unsorted"}</div>
       ${/^https?:\/\//.test(d.source) ? `<button class="linkrow play" data-play title="Open the song to hear it again">Play →</button>` : ""}</div>
     <div class="chips">${chips.map(([k, v], i) => `<div class="chip big pop" style="--i:${i + 1}"><span>${esc(k)}</span>${esc(v)}</div>`).join("")}</div>
     <div class="rise" style="--i:3">${askSection("Ask about this track", "e.g. What makes the groove feel the way it does?")}</div>${sim}`;

@@ -336,7 +336,6 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
 .removebtn { background: none; border: 0; padding: 4px 10px; margin: -4px -10px 4px 0; border-radius: 999px; font-size: 12px; color: var(--muted); transition: color .15s, background .15s; }
 .removebtn:hover { color: var(--err); background: rgba(255,255,255,.06); }
 .removebtn.armed { color: var(--err); background: rgba(255,120,120,.12); }
-.sub.where { margin-top: 2px; }
 
 /* ---------- Play, and sections that open on request ---------- */
 .linkrow.play { margin-top: 4px; color: var(--text); font-weight: 500; }

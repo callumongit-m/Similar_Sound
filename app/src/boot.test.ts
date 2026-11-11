@@ -967,21 +967,17 @@ test("if the song can't be removed (it is being analysed) the reason is shown an
   expect($("#detail").hidden).toBe(false);
 });
 
-test("an open song says which collection it is in, or that it is unsorted", async () => {
-  W.collections = [{ id: 1, name: "UK MINIMAL TECH", track_ids: ["t1"] }, { id: 2, name: "Rolling", track_ids: ["t1"] }];
+test("an open song does not repeat which collection it is in (you had to open that collection to get here)", async () => {
+  W.collections = [{ id: 1, name: "UK MINIMAL TECH", track_ids: ["t1"] }];
   await boot();
   tab("collections");
   click($("#folders .folder-head"));
   click($("#folders .mini"));
   await tick(80);
-  expect($("#detail .where").textContent).toBe("In UK MINIMAL TECH, Rolling");
+  expect(document.querySelector("#detail .where")).toBeNull();
+  expect($("#detail").textContent).not.toContain("UK MINIMAL TECH");
+  expect($("#detail").textContent).not.toContain("Unsorted");
 });
-
-test("a song in no collection says Unsorted", async () => {
-  await openT1();
-  expect($("#detail .where").textContent).toBe("Unsorted");
-});
-
 
 // ---------------- Play, and the closest-groove dropdown ----------------
 test("an open song has a Play link that asks the app to open the song's web address", async () => {
