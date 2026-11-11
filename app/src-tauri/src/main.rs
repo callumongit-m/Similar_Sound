@@ -47,6 +47,23 @@ fn stop_service(app: &AppHandle) {
     }
 }
 
+/// The page reports startup and any error here, so a blank or stuck window can be diagnosed from
+/// ~/.similar_sound/app.log instead of guessed at (release builds have no console).
+#[tauri::command]
+fn log(msg: String) {
+    use std::io::Write;
+    if let Some(home) = std::env::var_os("HOME") {
+        let path = PathBuf::from(home).join(".similar_sound/app.log");
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let _ = writeln!(f, "[{secs}] {msg}");
+        }
+    }
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -69,6 +86,7 @@ fn toggle_window(app: &AppHandle) {
 fn main() {
     let app = tauri::Builder::default()
         .manage(Service(Mutex::new(None)))
+        .invoke_handler(tauri::generate_handler![log])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon

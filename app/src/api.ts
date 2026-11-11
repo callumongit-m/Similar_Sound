@@ -19,8 +19,8 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   let res: Response;
   try {
     res = await fetch(BASE + path, { headers: { "Content-Type": "application/json" }, ...init });
-  } catch {
-    throw new Error("Can't reach the Similar Sound service. Is service/run.sh running?");
+  } catch (e) {
+    throw new Error(`Can't reach the Similar Sound service (${String(e)}). Is service/run.sh running?`);
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));

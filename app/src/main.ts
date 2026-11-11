@@ -1,6 +1,13 @@
+import { invoke } from "@tauri-apps/api/core";
 import { LogicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { api, type Job, type Similar, type Status, type TrackDoc, type TrackSummary } from "./api";
+
+// ---------- diagnostics: errors and startup go to ~/.similar_sound/app.log (via the Rust side) ----------
+const report = (msg: string) => { invoke("log", { msg }).catch(() => {}); };
+window.addEventListener("error", (e) => report(`error: ${e.message} @ ${e.filename}:${e.lineno}`));
+window.addEventListener("unhandledrejection", (e) => report(`unhandled rejection: ${String((e as PromiseRejectionEvent).reason)}`));
+report(`page started (${location.href})`);
 
 // ---------- state ----------
 let status: Status | null = null;
@@ -165,7 +172,6 @@ function fitWindow() {
   targetH = want;
   if (!raf) raf = requestAnimationFrame(stepHeight);
 }
-new ResizeObserver(fitWindow).observe($("#content"));
 
 // ---------- toast ----------
 function toast(e: unknown) {
@@ -202,6 +208,7 @@ $("#app").innerHTML = `
   </div></div>
   <div id="toast"></div>`;
 
+new ResizeObserver(fitWindow).observe($("#content")); // needs the shell above to exist
 $("#close").onclick = () => win?.close(); // the Rust side hides instead of quitting
 $("#pause").onclick = () => run(async () => { await (status?.state === "paused_user" ? api.resume() : api.pause()); await refresh(true); });
 
@@ -271,7 +278,8 @@ async function refresh(force = false) {
     offline = false;
     const done = status.jobs.filter((j) => j.status === "done").length;
     if (done !== doneCount || force) { doneCount = done; tracks = await api.tracks(); }
-  } catch {
+  } catch (e) {
+    if (!offline) report(`service unreachable: ${String(e)}`);
     status = null;
     offline = true;
   }
