@@ -9,5 +9,8 @@
     <key>NSAllowsLocalNetworking</key>
     <true/>
   </dict>
+  <!-- Shown by macOS the first time "Compare my project" listens to Ableton. -->
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Similar Sound listens to Ableton Live's audio while you press play, so it can compare your project with the songs in your library. The audio is analysed and thrown away, never saved.</string>
 </dict>
 </plist>
