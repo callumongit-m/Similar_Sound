@@ -31,7 +31,7 @@ const GAPS = { feel: FEEL, why: WHY, reference: "UK minimal", n: 1, is_collectio
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
 // The real service gives a job the same track_key from the moment it is created, so one card can follow it.
 const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
@@ -40,6 +40,7 @@ const PROVIDERS = [{ id: "gemini", name: "Google Gemini", needs_address: false }
 
 function fakeService() {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    if (W.down) throw new TypeError("Load failed");                       // the service is still starting
     const path = url.replace("http://127.0.0.1:8765", "");
     const method = init?.method ?? "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : undefined;
@@ -624,4 +625,73 @@ test("coming back to Compare shows the earlier comparison, with both links, unti
   await tick(120);
   expect($("#cmp .cmp-head").textContent).toContain("Compared with UK minimal");
   expect($$("#cmp .cmp-links button")).toHaveLength(2);
+});
+
+
+// ---------------- ghost loading while the service starts ----------------
+import { readFileSync } from "node:fs";
+
+test("while the service starts the window shows a phasing ghost, not 'Service not running'", async () => {
+  W.down = true;
+  await boot();
+  expect(document.body.classList.contains("booting")).toBe(true);
+  expect($("#offline").hidden).toBe(true);
+  expect($$("#pane-add .ghostlist .card.ghost")).toHaveLength(1);                       // a ghost of the song card to come
+  expect($$("#pane-collections .ghostlist .card.ghost")).toHaveLength(3);               // and of the library
+  expect($$("#pane-add .ghost .gline, #pane-add .ghost .gchip").length).toBeGreaterThan(2);
+  const url = $("#url") as HTMLInputElement;
+  expect(url.disabled).toBe(true);
+  expect(url.placeholder).toBe("Getting ready…");
+});
+
+test("the ghost gives way to the real window the moment the service answers", async () => {
+  W.down = true;
+  await boot();
+  expect(document.body.classList.contains("booting")).toBe(true);
+  W.down = false;
+  await tick(1500);                                                                      // the next poll
+  expect(document.body.classList.contains("booting")).toBe(false);
+  const url = $("#url") as HTMLInputElement;
+  expect(url.disabled).toBe(false);
+  expect(url.placeholder).toBe("Paste a SoundCloud link");
+  expect($("#offline").hidden).toBe(true);
+});
+
+test("Compare shows a ghost orb while starting, then starts listening once the service is up", async () => {
+  W.down = true;
+  await boot();
+  tab("compare");
+  await tick(80);
+  expect($("#pane-compare .ghostlist .gorb")).toBeTruthy();
+  expect($("#pane-compare .ghostlist").textContent).toContain("Getting ready…");
+  expect(W.calls.some((c) => c.path.startsWith("/listen"))).toBe(false);                 // nothing is asked of a service that isn't there
+  W.down = false;
+  await tick(1600);
+  expect(W.calls.some((c) => c.path === "/listen/start")).toBe(true);                    // and it picks up where it should
+  expect($("#cmp .cmp-title").textContent).toBe("Waiting for audio");
+});
+
+test("if the service never comes up, after a grace period it says so (and only then)", async () => {
+  W.down = true;
+  const realNow = Date.now();
+  const spy = vi.spyOn(Date, "now").mockReturnValue(realNow);
+  await boot();
+  await tick(1400);
+  expect($("#offline").hidden).toBe(true);                                                // still within the grace period
+  spy.mockReturnValue(realNow + 31_000);
+  await tick(1400);
+  expect(document.body.classList.contains("booting")).toBe(false);
+  expect($("#offline").hidden).toBe(false);
+  expect($("#offline").textContent).toContain("Service not running");
+  spy.mockRestore();
+});
+
+// ---------------- the corner buttons follow the window's corner ----------------
+test("corner buttons use the concentric radius, and the CSS radius matches the real window's", () => {
+  const css = readFileSync("src/style.css", "utf8");
+  const conf = JSON.parse(readFileSync("src-tauri/tauri.conf.json", "utf8"));
+  const windowRadius = conf.app.windows[0].windowEffects.radius;
+  expect(css).toMatch(new RegExp(`--win-radius:\\s*${windowRadius}px`));             // CSS and native window must agree
+  expect(css).toMatch(/\.iconbtn\.corner\s*\{[^}]*border-radius:\s*calc\(var\(--win-radius\)\s*-\s*var\(--edge-gap\)\)/);   // outer radius minus the gap
+  expect(css).toMatch(/\.iconbtn\.corner\s*\{[^}]*margin-top:\s*var\(--edge-gap\)/);
 });

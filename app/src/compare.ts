@@ -6,7 +6,8 @@ import { keyText } from "./songs";
 import { S } from "./state";
 import { $, errorText, esc, niceName, run, toast } from "./ui";
 
-export const compareHtml = `<div id="cmp"></div>`;
+export const compareHtml = `<div id="cmp"></div>
+  <div class="ghostlist"><div class="stage"><div class="gorb"></div><div class="cmp-title" style="opacity:.55">Getting ready…</div></div></div>`;
 
 let root: HTMLElement;
 let phase = "";

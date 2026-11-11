@@ -7,7 +7,7 @@ import { collectionsHtml, mountCollections, updateCollections } from "./collecti
 import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare";
 import { openDetail } from "./detail";
 import { keyPanelHtml, mountKeyPanel, toggleKeyPanel } from "./keypanel";
-import { S } from "./state";
+import { BOOT_GRACE_MS, S } from "./state";
 import { $, run } from "./ui";
 
 // ---------- diagnostics: errors and startup go to ~/.similar_sound/app.log (via the Rust side) ----------
@@ -15,6 +15,12 @@ const report = (msg: string) => { invoke("log", { msg }).catch(() => {}); };
 window.addEventListener("error", (e) => report(`error: ${e.message} @ ${e.filename}:${e.lineno}`));
 window.addEventListener("unhandledrejection", (e) => report(`unhandled rejection: ${String((e as PromiseRejectionEvent).reason)}`));
 report(`page started (${location.href})`);
+
+// ---------- ghost: the shape of the window before the service has answered ----------
+function ghostCards(n: number): string {
+  return Array.from({ length: n }, (_, i) => `<div class="card ghost" style="--i:${i}"><div class="row"><div class="grow"><div class="gline w60" style="--i:${i}"></div><div class="gline w35" style="--i:${i + 1}"></div></div>
+    <div class="gchips"><span class="gchip" style="--i:${i}"></span><span class="gchip" style="--i:${i + 1}"></span></div></div></div>`).join("");
+}
 
 // ---------- shell ----------
 type Tab = "add" | "collections" | "compare";
@@ -34,8 +40,8 @@ $("#app").innerHTML = `
   <div id="view"><div id="content">
     ${keyPanelHtml}
     <div class="hint" id="offline" hidden><b>Service not running</b>Start it with <code>service/run.sh</code>. This window reconnects by itself.</div>
-    <section id="pane-add" class="pane">${addSongHtml}</section>
-    <section id="pane-collections" class="pane" hidden>${collectionsHtml}</section>
+    <section id="pane-add" class="pane">${addSongHtml}<div class="ghostlist">${ghostCards(1)}</div></section>
+    <section id="pane-collections" class="pane" hidden>${collectionsHtml}<div class="ghostlist">${ghostCards(3)}</div></section>
     <section id="pane-compare" class="pane" hidden>${compareHtml}</section>
     <section id="detail" class="pane" hidden></section>
   </div></div>
@@ -70,7 +76,7 @@ function showTab(next: Tab) {
   document.querySelectorAll<HTMLElement>("#nav [data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === next));
   for (const [k] of TABS) pane(k).hidden = k !== next;
   if (leaving === "compare" && next !== "compare") leaveCompare();
-  if (next === "compare" && leaving !== "compare") enterCompare();
+  if (next === "compare" && leaving !== "compare" && !S.booting) enterCompare();   // while the service starts, Compare shows its ghost
   render();
 }
 $("#nav").addEventListener("click", (e) => {
@@ -111,6 +117,12 @@ function render() {
   $("#pause").classList.toggle("gone", !(queued > 0 || S.status?.state === "paused_user"));
   $("#pause").textContent = S.status?.state === "paused_user" ? "▶" : "❚❚";
   $("#offline").hidden = !S.offline;
+  const was = document.body.classList.contains("booting");
+  document.body.classList.toggle("booting", S.booting);
+  const url = $<HTMLInputElement>("#url");
+  url.disabled = S.booting;
+  url.placeholder = S.booting ? "Getting ready…" : "Paste a SoundCloud link";
+  if (was && !S.booting && tab === "compare") enterCompare();                         // the service is up: Compare can start listening
   $("#keybtn").classList.toggle("on", !!S.llm?.configured);               // lit when a key is connected
   updateAddSong(pane("add"));
   updateCollections(pane("collections"));
@@ -118,10 +130,12 @@ function render() {
 
 // ---------- polling ----------
 let doneCount = -1;
+const bootStart = Date.now();
 async function refresh(force = false) {
   try {
     S.status = await api.status();
     S.offline = false;
+    S.booting = false;
     const done = S.status.jobs.filter((j) => j.status === "done").length;
     if (done !== doneCount || force) {
       doneCount = done;
@@ -129,9 +143,10 @@ async function refresh(force = false) {
     }
     if (!S.llm) S.llm = await api.llm();
   } catch (e) {
-    if (!S.offline) report(`service unreachable: ${String(e)}`);
+    if (!S.offline && !S.booting) report(`service unreachable: ${String(e)}`);
     S.status = null;
-    S.offline = true;
+    if (S.booting && Date.now() - bootStart > BOOT_GRACE_MS) S.booting = false;     // it should have started by now
+    S.offline = !S.booting;                                                          // until then it is just starting up
   }
   render();
 }

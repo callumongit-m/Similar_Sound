@@ -10,6 +10,8 @@
   --stroke-soft: rgba(255, 255, 255, 0.09);
   --shine: rgba(255, 255, 255, 0.38);
   --err: rgba(255, 170, 165, 0.92);
+  --win-radius: 24px;   /* the window's corner radius (must match tauri.conf windowEffects.radius) */
+  --edge-gap: 8px;      /* how far in from the window edge the corner buttons sit */
   --font: -apple-system, "SF Pro Text", "Helvetica Neue", sans-serif;
 }
 * { box-sizing: border-box; }
@@ -20,7 +22,7 @@ input, textarea { font: inherit; color: var(--text); user-select: text; -webkit-
 
 #app {
   position: relative; height: 100%; display: flex; flex-direction: column; overflow: hidden;
-  border-radius: 24px;
+  border-radius: var(--win-radius);
   background: linear-gradient(155deg, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.04) 42%, rgba(255,255,255,0.08) 100%);
 }
 #app::after { /* the glass edge, drawn above everything so a hovered corner button never covers it */
@@ -34,18 +36,16 @@ input, textarea { font: inherit; color: var(--text); user-select: text; -webkit-
 #app > * { position: relative; }
 
 /* top bar: iOS sheet grabber in the middle, controls at the right */
-.titlebar { display: flex; align-items: center; justify-content: space-between; height: 32px; padding: 0; flex: none; }
+.titlebar { display: flex; align-items: flex-start; justify-content: space-between; height: calc(var(--edge-gap) + 34px + 2px); padding: 0 var(--edge-gap); flex: none; }
 .grabber { position: absolute; left: 50%; top: 9px; width: 38px; height: 5px; margin-left: -19px; border-radius: 3px; background: var(--faint); }
 .titlebar .spacer { flex: 1; }
-.iconbtn { width: 28px; height: 28px; border: 0; background: transparent; color: var(--muted); border-radius: 50%; display: grid; place-items: center; font-size: 13px; line-height: 1; transition: background .15s, color .15s, opacity .2s, transform .2s, width .2s; }
+.iconbtn { width: 28px; height: 28px; margin-top: calc(var(--edge-gap) + 3px); border: 0; background: transparent; color: var(--muted); border-radius: 10px; display: grid; place-items: center; font-size: 13px; line-height: 1; transition: background .15s, color .15s, opacity .2s, transform .2s, width .2s; }
 .iconbtn:hover { background: var(--glass-hi); color: var(--text); }
 .iconbtn.gone { opacity: 0; transform: scale(.6); pointer-events: none; width: 0; }
-/* The two corner buttons fill their corner of the window, so on hover the highlight follows the window's own
-   rounded corner (the window clips it) and ends in a matching curve on the inside, not a floating circle. */
-.iconbtn.corner { width: 46px; height: 32px; border-radius: 0; }
-.iconbtn.keybtn { border-bottom-right-radius: 16px; margin: 0 4px 0 0; }
-.iconbtn#close { border-bottom-left-radius: 16px; margin: 0 0 0 4px; }
-.iconbtn#pause { margin: 0 2px; }
+/* Concentric corners: a shape nested inside another has radius = outer radius - the gap between their edges.
+   Window radius 24, button 8 in from the edge => 16, so the button's curve runs parallel to the window's. */
+.iconbtn.corner { width: 34px; height: 34px; margin-top: var(--edge-gap); border-radius: calc(var(--win-radius) - var(--edge-gap)); }
+.iconbtn#pause { margin-right: 2px; }
 .add { padding: 0 0 4px; flex: none; }
 .add input {
   width: 100%; padding: 12px 16px; font-size: 14px; outline: none; border-radius: 16px;
@@ -230,7 +230,7 @@ code { background: var(--glass-hi); padding: 1px 6px; border-radius: 6px; font-s
 /* ---------- API key: the icon (top left) and its sheet ---------- */
 .keybtn { position: relative; }
 .keybtn.on { color: var(--text); }
-.keybtn.on::after { content: ""; position: absolute; right: 12px; bottom: 6px; width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 0 6px rgba(255,255,255,.6); animation: pop .4s var(--spring) both; }
+.keybtn.on::after { content: ""; position: absolute; right: 7px; bottom: 7px; width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 0 6px rgba(255,255,255,.6); animation: pop .4s var(--spring) both; }
 .keypanel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .38s var(--ease), margin .38s var(--ease); margin: 0; }
 .keypanel.open { grid-template-rows: 1fr; margin: 10px 0 2px; }
 .kp-inner { overflow: hidden; }
@@ -285,3 +285,18 @@ code { background: var(--glass-hi); padding: 1px 6px; border-radius: 6px; font-s
 .cmp-links { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; margin: 0 0 10px; }
 .linkrow { background: none; border: 0; padding: 3px 0; color: var(--muted); font-size: 12.5px; text-align: left; transition: color .15s, transform .15s var(--ease); }
 .linkrow:hover { color: var(--text); transform: translateX(3px); }
+
+/* ---------- ghost loading: what the window will look like, phasing, while the service starts ---------- */
+.ghostlist { max-height: 0; opacity: 0; overflow: hidden; pointer-events: none; transition: max-height .45s var(--ease), opacity .3s ease; }
+body.booting .ghostlist { max-height: 420px; opacity: 1; }
+.card.ghost { pointer-events: none; }
+.gline, .gchip, .gorb { background: rgba(255,255,255,.13); border-radius: 7px; animation: ghostphase 1.7s ease-in-out infinite; animation-delay: calc(var(--i, 0) * 160ms); }
+.gline { height: 11px; margin: 3px 0; }
+.gline.w60 { width: 58%; } .gline.w35 { width: 34%; height: 9px; opacity: .8; }
+.gchips { display: flex; gap: 6px; }
+.gchip { width: 54px; height: 22px; border-radius: 999px; }
+.folder.ghost { padding: 12px 14px; }
+.ghostlist .card { margin-bottom: 8px; }
+@keyframes ghostphase { 0%, 100% { opacity: .35; } 50% { opacity: 1; } }
+.gorb { width: 92px; height: 92px; margin: 18px auto 0; border-radius: 50%; }
+.add input:disabled { opacity: .6; cursor: progress; }

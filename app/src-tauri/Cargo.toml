@@ -11,4 +11,4 @@ tauri = { version = "2", features = ["macos-private-api", "tray-icon", "image-pn
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
-objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSGraphics"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["NSWindow", "NSResponder", "NSGraphics", "NSPanel"] }
