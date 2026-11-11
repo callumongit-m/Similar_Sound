@@ -231,3 +231,86 @@ def ask_about_comparison(llm: LLM, project: dict, comparison: dict, question: st
               f"The biggest measured differences, most important first:\n{json.dumps(table, ensure_ascii=False)}\n\n"
               "If they ask a follow-up, use the conversation so far.")
     return llm.complete(f"{SYSTEM}\n\n{prompt}", question, history)
+
+
+# ---------------------------------------------------------------- a whole collection
+MAX_SONG_LINES = 40            # per-song lines in the digest; beyond that the statistics still use every song
+SHARED_TRAITS = 10
+VARIABLE_TRAITS = 6
+COLLECTION_SYSTEM_NOTE = (
+    "This is a COLLECTION: reference songs the user grouped as one sub-genre, measured over each song's main build "
+    "and drop. They want to understand what the songs HAVE IN COMMON and what makes the style work. Lead with traits "
+    "most songs share (the 'most_shared_traits' and 'drum_patterns' below), then name any clear outliers. Quote the "
+    "numbers and say how many songs they hold for. Frame it as coming from the data ('Based off the data pulled from "
+    "the audio...'). The data does NOT include which notes, melodies or rhythms a synth, lead or pad plays, nor patch "
+    "or sound-design settings: for those, say what the data does show (that stem's level, brightness, spectrum, "
+    "stereo width, how it changes from build to drop) and that the data pulled from the audio can't tell us the exact "
+    "pattern. If they ask a follow-up, use the conversation so far."
+)
+
+
+def _stat_rows(docs: list[dict]) -> list[dict]:
+    flats = [_flat(d) for d in docs]
+    rows = []
+    for label in flats[0]:
+        vals = [f[label][0] for f in flats if label in f]
+        if len(vals) < max(2, len(docs) // 2):
+            continue
+        if label.endswith("level (dB)") and max(vals) < -40:        # a band nothing lives in: consistent, but means nothing
+            continue
+        scale = flats[0][label][1]
+        rows.append({"metric": label, "mean": round(float(np.mean(vals)), 2), "range": [round(min(vals), 2), round(max(vals), 2)],
+                     "songs": len(vals), "spread": float(np.std(vals)) / scale})
+    return rows
+
+
+def _step_patterns(docs: list[dict]) -> dict:
+    out = {}
+    for lane in ("kick", "mid", "hat"):
+        hits = [d["groove"][lane]["hit"] for d in docs if not d["groove"].get("empty")]
+        if not hits:
+            continue
+        freq = np.mean(np.array(hits) > 0.5, axis=0)
+        out[LANES[lane]] = {"steps_hit_in_70_percent_or_more_of_songs": [i for i, f in enumerate(freq) if f >= 0.7],
+                            "steps_hit_in_30_to_70_percent_of_songs": [i for i, f in enumerate(freq) if 0.3 <= f < 0.7]}
+    return out
+
+
+def collection_digest(name: str, docs: list[dict]) -> str:
+    """Everything the model needs to answer questions about a whole collection, in a size that does not grow with it:
+    per-song headlines (the first MAX_SONG_LINES), then statistics over ALL the songs: which measured traits they share,
+    which vary, and the drum step patterns most of them use."""
+    rows = sorted(_stat_rows(docs), key=lambda r: r["spread"])
+    strip = lambda r: {k: v for k, v in r.items() if k != "spread"}
+    bpms = [d["bpm"] for d in docs]
+    keys: dict[str, int] = {}
+    for d in docs:
+        keys[d["key"]] = keys.get(d["key"], 0) + 1
+    out = {
+        "collection": name, "songs_count": len(docs),
+        "bpm": {"mean": round(float(np.mean(bpms)), 1), "range": [round(min(bpms), 1), round(max(bpms), 1)]},
+        "keys_of_the_songs": dict(sorted(keys.items(), key=lambda kv: -kv[1])),
+        "most_shared_traits": [strip(r) for r in rows[:SHARED_TRAITS]],
+        "most_variable_traits": [strip(r) for r in rows[::-1][:VARIABLE_TRAITS]],
+        "drum_patterns_16th_steps_0_to_15": _step_patterns(docs),
+        "songs": [{"title": d.get("title"), "artist": d.get("artist"), "bpm": round(d["bpm"]), "key": d["key"],
+                   **({"swing": d["groove"]["swing"]} if not d["groove"].get("empty") else {}), "lufs": d["mix"]["lufs"]}
+                  for d in docs[:MAX_SONG_LINES]],
+    }
+    if len(docs) > MAX_SONG_LINES:
+        out["more_songs_not_listed"] = len(docs) - MAX_SONG_LINES
+    return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
+
+
+def ask_collection(store: Store, llm: LLM, name: str, docs: list[dict], question: str, history: tuple = ()) -> str:
+    if not docs:
+        raise ValueError("There are no songs in that collection yet.")
+    context = (f"{COLLECTION_SYSTEM_NOTE}\n\nMeasured data for the collection:\n{collection_digest(name, docs)}\n\n"
+               f"{_legend()}")
+    return llm.complete(f"{SYSTEM}\n\n{context}", question, history)
+
+
+def _legend() -> str:
+    return ("How to read the metrics: levels are dB relative to the stem's own total; stereo width is 0 (mono) to 1 (wide); "
+            "brightness is the spectral centroid in Hz; groove swing is the fraction of a 16th note that off-beats are "
+            "late (positive = late); 'rise at the drop' is how much louder that stem is in the drop than in the build.")

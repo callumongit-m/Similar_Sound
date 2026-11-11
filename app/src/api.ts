@@ -70,6 +70,7 @@ export const api = {
   newCollection: (name: string) => post<Collection>("/collections", { name }),
   renameCollection: (id: number, name: string) => call(`/collections/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
   deleteCollection: (id: number) => del(`/collections/${id}`),
+  askCollection: (id: number, question: string, history: Turn[] = []) => post<{ answer: string }>(`/collections/${id}/ask`, { question, history }),
   addToCollection: (id: number, trackId: string) => post(`/collections/${id}/tracks`, { track_id: trackId }),
   removeFromCollection: (id: number, trackId: string) => del(`/collections/${id}/tracks/${trackId}`),
   // hear the project

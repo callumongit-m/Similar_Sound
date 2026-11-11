@@ -16,9 +16,10 @@ export function formatAnswer(text: string): string {
 }
 
 /** The "Ask about ..." heading, the one-line caveat about what data exists, and the conversation box. */
-export const askSection = (title: string, placeholder: string) => `
+export const askSection = (title: string, placeholder: string, extraNote = "") => `
   <div class="section">${esc(title)}</div>
   <div class="section-sub">Each song only has data for the main build up and drop.</div>
+  ${extraNote ? `<div class="section-sub">${esc(extraNote)}</div>` : ""}
   ${askBoxHtml(placeholder)}`;
 
 export const askBoxHtml = (placeholder: string) => `

@@ -6,7 +6,7 @@ import { songCard } from "./songs";
 import { $, errorText, esc, niceName, run, syncCards, toast } from "./ui";
 import type { Card } from "./ui";
 
-export interface CollHost { onOpen(id: string): void; refresh(): Promise<void> }
+export interface CollHost { onOpen(id: string): void; onChat(collectionId: number): void; refresh(): Promise<void> }
 
 /** Shown on hover of the (i) beside "New collection". It describes how the drag and remove gestures below work. */
 export const INFO_TIP = "You can have the same track in multiple collections. To do this you must first create the new collection and then drag the track from the one collection into the other. To remove tracks from collections you must click the 'x' icon which appears when your mouse is hovering over that track.";
@@ -39,6 +39,7 @@ function folderCard(c: Collection): Card {
     cls: `folder${open.has(c.id) ? " open" : ""}`,
     attrs: { cid: String(c.id) },
     html: `<div class="folder-head" data-toggle><span class="chev">›</span><span class="fname" data-name>${esc(c.name)}</span>
+        <button class="btn small chatbtn" data-chat ${c.track_ids.length ? "" : "disabled"} title="${c.track_ids.length ? "Chat about every song in this collection" : "Add songs to this collection to chat about it"}">Chat</button>
         <span class="count">${c.track_ids.length}</span><button class="x" data-delete title="Delete this collection (songs stay in your library)">✕</button></div>
       <div class="folder-body"><div class="folder-inner"><div class="folder-list">${rows || `<div class="sub dropmsg">Drop songs here</div>`}</div></div></div>`,
   };
@@ -69,6 +70,11 @@ export function mountCollections(root: HTMLElement, host: CollHost) {
     if (t.closest("[data-new]")) { newRow.hidden = !newRow.hidden; if (!newRow.hidden) nameInput.focus(); return; }
     if (t.closest("[data-create]")) { create(); return; }
     const folder = t.closest<HTMLElement>(".folder");
+    const chat = t.closest<HTMLElement>("[data-chat]");
+    if (chat && folder) {                                  // Chat sits in the folder's banner but must not open or close the folder
+      if (!chat.hasAttribute("disabled")) host.onChat(Number(folder.dataset.cid));
+      return;
+    }
     const del = t.closest<HTMLElement>("[data-delete]");
     if (del && folder) {                                   // two clicks: songs are safe, but a folder's grouping is not
       if (del.dataset.armed) { run(async () => { await api.deleteCollection(Number(folder.dataset.cid)); await reload(); }); return; }

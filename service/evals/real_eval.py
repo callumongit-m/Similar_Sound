@@ -2,13 +2,16 @@
 
     uv run python evals/real_eval.py [cases.json]
 
-Audio is cached in ~/.similar_sound/eval_cache (delete it any time). Add tracks to real_cases.json.
+Audio is downloaded into a temporary folder that is deleted when the run ends: nothing is left on disk. Add tracks
+to real_cases.json.
 Metrics: top1 = chosen drop within 2 bars of truth; in_top5 = truth is among the ranked candidates.
 """
 import hashlib
 import json
+import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import librosa
@@ -17,7 +20,7 @@ import numpy as np
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from similar_sound import config, segment  # noqa: E402
 
-CACHE = config.DATA_DIR / "eval_cache"
+CACHE = Path(tempfile.mkdtemp(prefix="similar-sound-eval-"))   # removed at the end of main()
 BLOCKS = " ▁▂▃▄▅▆▇█"
 
 
@@ -40,6 +43,13 @@ def audio(url: str) -> Path:
 
 
 def main(path: str) -> int:
+    try:
+        return _run(path)
+    finally:
+        shutil.rmtree(CACHE, ignore_errors=True)       # the songs are only ever here for the length of a run
+
+
+def _run(path: str) -> int:
     cases = json.loads(Path(path).read_text())
     top1 = in5 = 0
     for c in cases:

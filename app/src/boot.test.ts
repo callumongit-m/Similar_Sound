@@ -88,6 +88,7 @@ function fakeService() {
     if (path === "/listen") return ok(W.listen);
     if (path === "/listen/start") { W.listen = { ...W.listen, state: "waiting" }; return ok(W.listen); }
     if (path === "/listen/cancel") { W.listen = { ...W.listen, state: "idle" }; return ok(W.listen); }
+    if (/^\/collections\/\d+\/ask$/.test(path)) { if (W.askError) return fail(503, W.askError); return ok({ answer: W.answerText ?? "They all share a steady kick." }); }
     if (path === "/compare") return ok(GAPS);
     if (path === "/compare/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: "Fix the bass first." }); }
     return fail(404, "nope");
@@ -1077,4 +1078,93 @@ test("a song renamed by the service shows its new name on its own", async () => 
   expect(cards.map((c) => c.querySelector(".title")!.textContent)).toContain("Find my way home");
   expect(cards.map((c) => c.querySelector(".sub")!.textContent)).toContain("Max Dean, Luke dean and Nafe smallz");
   spy.mockRestore();
+});
+
+// ---------------- Chat, in a collection's banner ----------------
+const COLL = [{ id: 1, name: "UK minimal", track_ids: ["t1", "t2"] }, { id: 2, name: "Empty one", track_ids: [] }];
+async function collections() { W.collections = COLL.map((c) => ({ ...c, track_ids: [...c.track_ids] })); await boot(); tab("collections"); }
+const collectionAsks = () => W.calls.filter((c) => /^\/collections\/\d+\/ask$/.test(c.path));
+
+test("each collection's banner has a white Chat button, left of the song count", async () => {
+  await collections();
+  const head = $$("#folders .folder-head")[0];
+  expect([...head.children].map((c) => c.className.split(" ")[0])).toEqual(["chev", "fname", "btn", "count", "x"]);
+  const chat = head.querySelector<HTMLElement>("[data-chat]")!;
+  expect(chat.textContent).toBe("Chat");
+  expect(chat.classList.contains("ghost")).toBe(false);                                   // the same white style as the Ask button
+  expect(chat.nextElementSibling!.textContent).toBe("2");                                  // and the count comes right after it
+});
+
+test("clicking Chat opens a chat with that collection, and does not open or close the folder", async () => {
+  await collections();
+  const folder = $$("#folders .folder")[0];
+  click(folder.querySelector("[data-chat]")!);
+  expect(folder.classList.contains("open")).toBe(false);
+  expect($("#detail").hidden).toBe(false);
+  expect($("#pane-collections").hidden).toBe(true);
+  expect($("#detail .h1").textContent).toBe("UK minimal");
+  expect($("#detail .sub").textContent).toBe("2 songs");
+  expect([...document.querySelectorAll("#detail .section-sub")].map((x) => x.textContent)).toEqual([
+    "Each song only has data for the main build up and drop.", "Answers draw on all 2 songs in this collection together."]);
+});
+
+test("a question goes to the collection, follow-ups carry the conversation, Enter sends", async () => {
+  await collections();
+  click($$("#folders .folder")[0].querySelector("[data-chat]")!);
+  const q = $("#detail [data-q]") as HTMLTextAreaElement;
+  W.answerText = "Based off the data pulled from the audio, 2 of 2 songs hit the kick on 0, 4, 8, 12.";
+  q.value = "What is the common synth pattern that makes these catchy?"; enter(q);
+  await tick(80);
+  W.answerText = "And the hats sit on the off-beats.";
+  q.value = "and the hats?"; enter(q);
+  await tick(80);
+  const [first, second] = collectionAsks();
+  expect(first.path).toBe("/collections/1/ask");
+  expect(first.body).toEqual({ question: "What is the common synth pattern that makes these catchy?", history: [] });
+  expect(second.body.history).toEqual([{ q: "What is the common synth pattern that makes these catchy?", a: "Based off the data pulled from the audio, 2 of 2 songs hit the kick on 0, 4, 8, 12." }]);
+  expect($$("#detail .turn .answer").map((a) => a.textContent)).toEqual(["Based off the data pulled from the audio, 2 of 2 songs hit the kick on 0, 4, 8, 12.", "And the hats sit on the off-beats."]);
+});
+
+test("Back returns to the collections, and the conversation does not outlive leaving the chat", async () => {
+  await collections();
+  click($$("#folders .folder")[0].querySelector("[data-chat]")!);
+  const q = $("#detail [data-q]") as HTMLTextAreaElement;
+  q.value = "hello"; enter(q);
+  await tick(80);
+  click($("#detail [data-back]"));
+  expect($("#detail").hidden).toBe(true);
+  expect($("#pane-collections").hidden).toBe(false);
+  click($$("#folders .folder")[0].querySelector("[data-chat]")!);
+  expect($$("#detail .turn")).toHaveLength(0);
+});
+
+test("an empty collection's Chat is switched off", async () => {
+  await collections();
+  const chat = $$("#folders .folder")[1].querySelector<HTMLButtonElement>("[data-chat]")!;
+  expect(chat.disabled).toBe(true);
+  expect(chat.title).toContain("Add songs");
+  click(chat);
+  expect($("#detail").hidden).toBe(true);
+});
+
+test("each collection chats about its own songs", async () => {
+  W.collections = [{ id: 1, name: "A", track_ids: ["t1"] }, { id: 7, name: "B", track_ids: ["t2"] }];
+  await boot();
+  tab("collections");
+  click($$("#folders .folder")[1].querySelector("[data-chat]")!);
+  ($("#detail [data-q]") as HTMLTextAreaElement).value = "hi";
+  enter($("#detail [data-q]"));
+  await tick(80);
+  expect(collectionAsks()[0].path).toBe("/collections/7/ask");
+  expect($("#detail .h1").textContent).toBe("B");
+});
+
+test("running out of credits in a collection chat shows the same plain sentence", async () => {
+  await collections();
+  click($$("#folders .folder")[0].querySelector("[data-chat]")!);
+  W.askError = { message: "I need more token credits", code: "credits" };
+  ($("#detail [data-q]") as HTMLTextAreaElement).value = "hi";
+  enter($("#detail [data-q]"));
+  await tick(80);
+  expect($("#detail .answer").textContent).toBe("I need more token credits");
 });

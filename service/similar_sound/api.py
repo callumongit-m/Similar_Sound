@@ -223,6 +223,15 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
         library_call(lambda: library.delete(store, cid))
         return {"id": cid}
 
+    @app.post("/collections/{cid}/ask")
+    def ask_collection(cid: int, body: Question):
+        """Chat with the context of every song in a collection."""
+        name = library_call(lambda: library.name_of(store, cid))
+        docs = library_call(lambda: library.docs(store, cid))
+        if not docs:
+            raise HTTPException(400, "There are no songs in that collection yet.")
+        return {"answer": llm_call(lambda g: coach.ask_collection(store, g, name, docs, body.question, _history(body.history)))}
+
     @app.post("/collections/{cid}/tracks")
     def add_to_collection(cid: int, body: TrackRef):
         library_call(lambda: library.add(store, cid, body.track_id))

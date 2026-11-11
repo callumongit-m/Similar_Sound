@@ -3,6 +3,7 @@ import { LogicalSize } from "@tauri-apps/api/dpi";
 import { currentMonitor, getCurrentWindow, PhysicalPosition } from "@tauri-apps/api/window";
 import { addSongHtml, mountAddSong, updateAddSong } from "./addSong";
 import { api } from "./api";
+import { openCollectionChat } from "./chat";
 import { collectionsHtml, mountCollections, updateCollections } from "./collections";
 import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare";
 import { openDetail } from "./detail";
@@ -124,7 +125,16 @@ function closeDetail(restore: boolean) {
 
 // ---------- views ----------
 mountAddSong(pane("add"), { onOpen: openSong, refresh: () => refresh(true) });
-mountCollections(pane("collections"), { onOpen: openSong, refresh: () => refresh(true) });
+mountCollections(pane("collections"), {
+  onOpen: openSong,
+  onChat: (cid) => {
+    const c = S.collections.find((x) => x.id === cid);
+    if (!c) return;
+    pane(tab).hidden = true;
+    openCollectionChat($("#detail"), { id: c.id, name: c.name, count: c.track_ids.length }, { onBack: () => closeDetail(true) });
+  },
+  refresh: () => refresh(true),
+});
 mountCompare($("#cmp"));
 
 mountKeyPanel(() => render());
