@@ -21,7 +21,9 @@ class Provider:
 
 PROVIDERS: dict[str, Provider] = {p.id: p for p in (
     Provider("gemini", "Google Gemini", "gemini", "https://generativelanguage.googleapis.com/v1beta", ("AIza",),
-             ("gemini-2.5-flash-lite", "gemini-2.0-flash-lite")),
+             # 2.5 is cheaper but Google no longer lets new users call it even though it is still listed;
+             # the app tries each candidate with a tiny real request, so this order is "cheapest that works".
+             ("gemini-2.5-flash-lite", "gemini-3.1-flash-lite", "gemini-3.5-flash-lite")),
     Provider("anthropic", "Anthropic Claude", "anthropic", "https://api.anthropic.com/v1", ("sk-ant-",),
              ("claude-haiku-5-5", "claude-haiku-4-5-20251001")),
     Provider("openai", "OpenAI", "openai", "https://api.openai.com/v1", ("sk-",),

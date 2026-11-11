@@ -265,7 +265,7 @@ test("running out of credits shows exactly 'I need more token credits'", async (
 });
 
 test("without a key the ask box points at the key icon and its button opens the key panel", async () => {
-  W.askError = { message: "I need an API key first. Use the key icon at the top left.", code: "no_key" };
+  W.askError = { message: "You need to add your own AI API key using the key icon in the top left", code: "no_key" };
   await boot();
   tab("collections");
   click($("#unsorted .card.click"));
@@ -273,7 +273,7 @@ test("without a key the ask box points at the key icon and its button opens the 
   ($("#detail [data-q]") as HTMLTextAreaElement).value = "why?";
   click($("#detail [data-ask]"));
   await tick(80);
-  expect($("#detail .answer").textContent).toContain("key icon at the top left");
+  expect($("#detail .answer").textContent).toContain("You need to add your own AI API key using the key icon in the top left");
   expect($("#keypanel").classList.contains("open")).toBe(false);
   click($("#detail [data-openkey]"));
   expect($("#keypanel").classList.contains("open")).toBe(true);
@@ -351,4 +351,60 @@ test("a connected key can be removed", async () => {
   await tick(80);
   expect($("#keybtn").classList.contains("on")).toBe(false);
   expect($("#keypanel [data-status]").textContent).toContain("No key yet");
+});
+
+
+// ---------------- ask: Enter sends ----------------
+const enter = (el: Element, init: KeyboardEventInit = {}) => {
+  const e = new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
+  el.dispatchEvent(e);
+  return e;
+};
+
+test("pressing Enter in the ask box sends the question, with no click on Ask", async () => {
+  await boot();
+  tab("collections");
+  click($("#unsorted .card.click"));
+  await tick(80);
+  const q = $("#detail [data-q]") as HTMLTextAreaElement;
+  q.value = "what makes the groove roll?";
+  const e = enter(q);
+  await tick(80);
+  expect(W.calls.some((c) => c.path === "/tracks/t1/ask" && c.body.question === "what makes the groove roll?")).toBe(true);
+  expect(e.defaultPrevented).toBe(true);                         // no stray newline left behind
+  expect($("#detail .answer").textContent).toBe("It is rolling.");
+  expect(q.value).toBe("");                                      // cleared, ready for the next question
+});
+
+test("Shift+Enter makes a new line instead of sending, and an empty box sends nothing", async () => {
+  await boot();
+  tab("collections");
+  click($("#unsorted .card.click"));
+  await tick(80);
+  const q = $("#detail [data-q]") as HTMLTextAreaElement;
+  q.value = "first line";
+  const e = enter(q, { shiftKey: true });
+  await tick(60);
+  expect(e.defaultPrevented).toBe(false);
+  expect(W.calls.some((c) => c.path === "/tracks/t1/ask")).toBe(false);
+  q.value = "   ";
+  enter(q);
+  await tick(60);
+  expect(W.calls.some((c) => c.path === "/tracks/t1/ask")).toBe(false);
+});
+
+test("Enter works in the comparison's ask box too", async () => {
+  await boot();
+  tab("compare");
+  await tick(80);
+  W.listen = { ...LISTEN, state: "ready", heard: { bpm: 124, key: "A min", seconds: 22 } };
+  await tick(400);
+  click($("#cmp .pick[data-kind='track']"));
+  await tick(80);
+  const q = $("#cmp [data-q]") as HTMLTextAreaElement;
+  q.value = "what should I fix first?";
+  enter(q);
+  await tick(80);
+  expect(W.calls.some((c) => c.path === "/compare/ask" && c.body.question === "what should I fix first?")).toBe(true);
+  expect($("#cmp [data-answer] .answer").textContent).toBe("Fix the bass first.");
 });

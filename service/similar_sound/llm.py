@@ -42,7 +42,7 @@ class OutOfCredits(LLMError):
 
 class NoKey(LLMError):
     def __init__(self) -> None:
-        super().__init__("I need an API key first. Use the key icon at the top left.", "no_key")
+        super().__init__("You need to add your own AI API key using the key icon in the top left", "no_key")
 
 
 @dataclass(frozen=True)
@@ -51,6 +51,10 @@ class Creds:
     key: str
     model: str
     base_url: str | None = None      # only for "custom"
+
+
+def save_creds(creds: "Creds") -> None:
+    keychain.set(asdict(creds))
 
 
 class LLM(Protocol):
@@ -70,27 +74,27 @@ def _base(c: Creds) -> str:
 
 
 # ---------------------------------------------------------------- wire formats
-def _request(c: Creds, system: str, prompt: str) -> urllib.request.Request:
+def _request(c: Creds, system: str, prompt: str, max_tokens: int = MAX_OUTPUT_TOKENS) -> urllib.request.Request:
     kind, base, h = PROVIDERS[c.provider].kind, _base(c), {"Content-Type": "application/json"}
     if kind == "gemini":
         h["x-goog-api-key"] = c.key
         body = {"systemInstruction": {"parts": [{"text": system}]},
                 "contents": [{"role": "user", "parts": [{"text": prompt}]}],
-                "generationConfig": {"maxOutputTokens": MAX_OUTPUT_TOKENS, "temperature": 0.3}}
+                "generationConfig": {"maxOutputTokens": max_tokens, "temperature": 0.3}}
         return urllib.request.Request(f"{base}/models/{c.model}:generateContent", json.dumps(body).encode(), h)
     if kind == "anthropic":
         h.update({"x-api-key": c.key, "anthropic-version": "2023-06-01"})
-        body = {"model": c.model, "max_tokens": MAX_OUTPUT_TOKENS, "temperature": 0.3, "system": system,
+        body = {"model": c.model, "max_tokens": max_tokens, "temperature": 0.3, "system": system,
                 "messages": [{"role": "user", "content": prompt}]}
         return urllib.request.Request(f"{base}/messages", json.dumps(body).encode(), h)
     h["Authorization"] = f"Bearer {c.key}"
     body = {"model": c.model, "messages": [{"role": "system", "content": system}, {"role": "user", "content": prompt}]}
     if c.provider == "openai":   # OpenAI's newer models reject max_tokens, and reasoning models reject temperature
-        body["max_completion_tokens"] = MAX_OUTPUT_TOKENS
+        body["max_completion_tokens"] = max_tokens
         if not c.model.startswith(("gpt-5", "o1", "o3", "o4")):
             body["temperature"] = 0.3
     else:
-        body["max_tokens"] = MAX_OUTPUT_TOKENS
+        body["max_tokens"] = max_tokens
         body["temperature"] = 0.3
     return urllib.request.Request(f"{base}/chat/completions", json.dumps(body).encode(), h)
 
@@ -116,8 +120,9 @@ def _list_request(p: Provider, key: str, base: str) -> urllib.request.Request:
 
 
 def _model_names(p: Provider, data: dict) -> set[str]:
-    if p.kind == "gemini":
-        return {m["name"].removeprefix("models/") for m in data.get("models", [])}
+    if p.kind == "gemini":   # the list also holds image, speech and embedding models that cannot answer a question
+        return {m["name"].removeprefix("models/") for m in data.get("models", [])
+                if "generateContent" in m.get("supportedGenerationMethods", ["generateContent"])}
     return {m["id"] for m in data.get("data", [])}
 
 
@@ -158,8 +163,10 @@ def _call(opener: Callable, req: urllib.request.Request, timeout: int = 60) -> d
 
 # ---------------------------------------------------------------- the client
 class Client:
-    def __init__(self, store=None, creds: Callable[[], Creds | None] = stored_creds, opener: Callable = urllib.request.urlopen):
+    def __init__(self, store=None, creds: Callable[[], Creds | None] = stored_creds, opener: Callable = urllib.request.urlopen,
+                 save: Callable[[Creds], None] | None = None):
         self._store, self._creds, self._open = store, creds, opener
+        self._save = save if save is not None else save_creds
 
     def _count_call(self) -> None:
         if self._store is None:
@@ -175,7 +182,20 @@ class Client:
         if not c:
             raise NoKey()
         self._count_call()
-        data = _call(self._open, _request(c, system, prompt[:MAX_INPUT_CHARS]))
+        prompt = prompt[:MAX_INPUT_CHARS]
+        try:
+            return self._ask(c, system, prompt)
+        except LLMError as e:
+            if e.code != "bad_model":
+                raise
+        # The saved model has been retired or withdrawn for this key (companies do this). Find one that works
+        # right now, remember it, and try once more: a key never stops working because a model name aged.
+        c = connect(c.key, c.provider, c.base_url, None, self._open)
+        self._save(c)
+        return self._ask(c, system, prompt)
+
+    def _ask(self, c: Creds, system: str, prompt: str) -> str:
+        data = _call(self._open, _request(c, system, prompt))
         try:
             return _answer(c, data)
         except (KeyError, IndexError, StopIteration):
@@ -209,13 +229,23 @@ def connect(key: str, provider: str | None = None, base_url: str | None = None, 
         raise LLMError("That model name has odd characters in it.", "need_model")
     base = base_url or p.base_url or ""
     names = _model_names(p, _call(opener, _list_request(p, key, base), timeout=20))   # free; also proves the key works
-    chosen = model or next((m for m in p.models if m in names), None)
-    if chosen is None:
+    candidates = [model] if model else [m for m in p.models if m in names]
+    if not candidates:
         raise LLMError(f"That key works, but I couldn't pick a cheap {p.name} model automatically. Type the model name.", "need_model")
-    if p.id != "custom" and chosen not in names:
-        raise LLMError(f"{chosen} isn't available to that key.", "bad_model")
-    return Creds(p.id, key, chosen, base_url)
+    # A model being *listed* does not mean this key can *use* it (Google lists models it no longer lets new
+    # users call). So each candidate gets a tiny real request, a few tokens, and the first that answers wins.
+    for m in candidates:
+        c = Creds(p.id, key, m, base_url)
+        try:
+            _call(opener, _request(c, "Reply with OK.", "OK", max_tokens=8))
+            return c
+        except LLMError as e:
+            if e.code == "bad_model":
+                continue
+            if e.code in ("credits", "rate_limit"):   # the key is real but cannot be tried right now: take the cheapest
+                return c
+            raise
+    raise LLMError(f"That key works, but none of the cheap {p.name} models I know are available to it. Type the model name.", "need_model")
 
 
-def save(creds: Creds) -> None:
-    keychain.set(asdict(creds))
+save = save_creds

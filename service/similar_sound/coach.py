@@ -158,7 +158,10 @@ def ask(store: Store, llm: LLM, track_id: str, question: str) -> str:
     doc = store.get(track_id)
     if doc is None:
         raise KeyError(track_id)
-    prompt = (f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
+    prompt = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
+              "coach them or list fixes unless they ask for that. Answer exactly the question asked, in a few plain "
+              "sentences, quoting the measured numbers. No preamble or disclaimers unless the question needs audio.\n\n"
+              f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
               f"Closest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}\n\n"
               f"Question: {question}")
     return llm.complete(SYSTEM, prompt)

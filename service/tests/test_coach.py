@@ -111,3 +111,16 @@ def test_what_the_llm_is_sent_contains_the_stems_and_their_labels():
     coach.ask(s, spy, "a", "how loud is the bass stem?")
     assert '"bass":{"loudness_dB"' in spy.prompt and "sub (20-60 Hz)" in spy.prompt
     assert "never invent a measurement" in spy.system
+
+
+def test_a_reference_song_is_explained_not_coached():
+    class Spy:
+        def complete(self, system, prompt): self.prompt = prompt; return "ok"
+    import tempfile, pathlib
+    from similar_sound.store import Store
+    s = Store(pathlib.Path(tempfile.mkdtemp()) / "c.db")
+    d = doc(); d["groove"] = features.groove(drums(swing=0.0), 124)
+    s.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
+    spy = Spy()
+    coach.ask(s, spy, "a", "how loud is the bass?")
+    assert "REFERENCE track" in spy.prompt and "not their own project" in spy.prompt and "Answer exactly the question asked" in spy.prompt

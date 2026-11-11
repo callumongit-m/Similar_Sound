@@ -56,7 +56,7 @@ def test_prefix_identifies_the_company(key, expected):
 def test_gemini_request(tmp_path):
     seen = {}
     client(tmp_path, recording(GEMINI_OK, seen)).complete("sys", "hello")
-    assert seen["url"].endswith("/models/gemini-2.5-flash-lite:generateContent")
+    assert seen["url"].endswith(":generateContent") and "/models/gemini-" in seen["url"]
     assert seen["headers"]["x-goog-api-key"] == KEY and KEY not in json.dumps(seen["body"])
     assert seen["body"]["generationConfig"]["maxOutputTokens"] == llm.MAX_OUTPUT_TOKENS
 
@@ -168,10 +168,17 @@ def test_connect_picks_the_cheapest_candidate_the_key_can_use():
     assert (c.provider, c.model) == ("gemini", "gemini-2.5-flash-lite")
 
 
-def test_connect_does_not_spend_anything_it_only_lists_models():
-    seen = {}
-    llm.connect("AIza" + "a" * 35, opener=recording({"models": [{"name": "models/gemini-2.5-flash-lite"}]}, seen))
-    assert seen["url"].endswith("/models?pageSize=200") and seen["body"] == {}        # a GET, no generation
+def test_connecting_costs_next_to_nothing_one_free_list_and_one_tiny_test_request():
+    reqs = []
+    def opener(req, timeout=0):
+        reqs.append((req.get_method(), req.full_url, json.loads(req.data or b"{}")))
+        if ":generateContent" in req.full_url:
+            return _Resp(json.dumps(GEMINI_OK).encode())
+        return _Resp(json.dumps({"models": [{"name": "models/gemini-2.5-flash-lite"}]}).encode())
+    llm.connect("AIza" + "a" * 35, opener=opener)
+    assert [r[0] for r in reqs] == ["GET", "POST"]                                    # list (free), then one probe
+    assert reqs[1][2]["generationConfig"]["maxOutputTokens"] == 8                      # a few tokens at most
+    assert "Reply with OK" in json.dumps(reqs[1][2])
 
 
 def test_unknown_company_asks_which_one_then_works():
@@ -209,3 +216,81 @@ def test_a_key_the_company_rejects_is_reported_not_saved():
     with pytest.raises(llm.LLMError) as e:
         llm.connect("AIza" + "a" * 35, opener=http(400, {"error": {"status": "INVALID_ARGUMENT", "message": "API key not valid. Please pass a valid API key."}}))
     assert e.value.code == "bad_key"
+
+
+# ---------- a model that is LISTED but not USABLE (Google withdrew gemini-2.5-flash-lite for new users) ----------
+RETIRED = {"error": {"status": "NOT_FOUND", "message": "This model models/gemini-2.5-flash-lite is no longer available to new users."}}
+
+
+def gemini_router(listed, usable, calls=None):
+    """GET /models lists `listed`; generateContent only answers for models in `usable`, 404 otherwise."""
+    def opener(req, timeout=0):
+        model = req.full_url.split("/models/")[-1].split(":")[0] if ":generateContent" in req.full_url else None
+        if calls is not None:
+            calls.append(model or "LIST")
+        if model is None:
+            return _Resp(json.dumps({"models": [{"name": f"models/{m}", "supportedGenerationMethods": ["generateContent"]} for m in listed]}).encode())
+        if model in usable:
+            return _Resp(json.dumps(GEMINI_OK).encode())
+        raise urllib.error.HTTPError(req.full_url, 404, "nf", {}, io.BytesIO(json.dumps(RETIRED).encode()))
+    return opener
+
+
+def test_connect_skips_a_listed_model_that_cannot_actually_be_called():
+    calls = []
+    c = llm.connect("AIza" + "a" * 35, opener=gemini_router(["gemini-2.5-flash-lite", "gemini-3.1-flash-lite"], {"gemini-3.1-flash-lite"}, calls))
+    assert c.model == "gemini-3.1-flash-lite"
+    assert calls == ["LIST", "gemini-2.5-flash-lite", "gemini-3.1-flash-lite"]       # tried the cheapest first, then moved on
+
+
+def test_connect_uses_the_cheapest_model_when_it_really_works():
+    calls = []
+    c = llm.connect("AIza" + "a" * 35, opener=gemini_router(["gemini-2.5-flash-lite", "gemini-3.1-flash-lite"], {"gemini-2.5-flash-lite", "gemini-3.1-flash-lite"}, calls))
+    assert c.model == "gemini-2.5-flash-lite" and calls == ["LIST", "gemini-2.5-flash-lite"]   # one tiny test call, nothing more
+
+
+def test_connect_with_nothing_usable_asks_for_a_model_name():
+    with pytest.raises(llm.LLMError) as e:
+        llm.connect("AIza" + "a" * 35, opener=gemini_router(["gemini-2.5-flash-lite"], set()))
+    assert e.value.code == "need_model" and "Type the model name" in str(e.value)
+
+
+def test_connect_when_the_key_has_no_credits_still_accepts_it():
+    def opener(req, timeout=0):
+        if ":generateContent" in req.full_url:
+            raise urllib.error.HTTPError(req.full_url, 429, "x", {}, io.BytesIO(b'{"error":{"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded"}}'))
+        return _Resp(json.dumps({"models": [{"name": "models/gemini-2.5-flash-lite"}]}).encode())
+    assert llm.connect("AIza" + "a" * 35, opener=opener).model == "gemini-2.5-flash-lite"   # key is real; credits show up when asking
+
+
+def test_models_that_cannot_generate_text_are_never_candidates():
+    def opener(req, timeout=0):
+        return _Resp(json.dumps({"models": [{"name": "models/gemini-2.5-flash-lite", "supportedGenerationMethods": ["embedContent"]},
+                                            {"name": "models/gemini-3.1-flash-lite", "supportedGenerationMethods": ["generateContent"]}]}).encode()) \
+            if ":generateContent" not in req.full_url else _Resp(json.dumps(GEMINI_OK).encode())
+    assert llm.connect("AIza" + "a" * 35, opener=opener).model == "gemini-3.1-flash-lite"
+
+
+def test_a_saved_model_that_gets_retired_repairs_itself_on_the_next_question(tmp_path):
+    calls, saved = [], []
+    opener = gemini_router(["gemini-2.5-flash-lite", "gemini-3.1-flash-lite"], {"gemini-3.1-flash-lite"}, calls)
+    stale = llm.Creds("gemini", "AIza" + "a" * 35, "gemini-2.5-flash-lite")                # what an older version saved
+    c = llm.Client(Store(tmp_path / "h.db"), creds=lambda: stale, opener=opener, save=saved.append)
+    assert c.complete("s", "p") == "hi"                                                    # the user just gets an answer
+    assert [x.model for x in saved] == ["gemini-3.1-flash-lite"]                           # and the fix is remembered
+    assert calls[0] == "gemini-2.5-flash-lite" and calls[-1] == "gemini-3.1-flash-lite"
+
+
+def test_repair_is_attempted_once_and_failures_surface(tmp_path):
+    saved = []
+    stale = llm.Creds("gemini", "AIza" + "a" * 35, "gemini-2.5-flash-lite")
+    c = llm.Client(Store(tmp_path / "h.db"), creds=lambda: stale, opener=gemini_router(["gemini-2.5-flash-lite"], set()), save=saved.append)
+    with pytest.raises(llm.LLMError) as e:
+        c.complete("s", "p")
+    assert e.value.code == "need_model" and saved == []
+
+
+def test_no_key_message_is_the_one_the_user_asked_for():
+    with pytest.raises(llm.NoKey) as e:
+        llm.Client(None, creds=lambda: None).complete("s", "p")
+    assert str(e.value) == "You need to add your own AI API key using the key icon in the top left"

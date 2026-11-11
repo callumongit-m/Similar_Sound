@@ -28,13 +28,24 @@ export function wireAsk(root: HTMLElement, send: (question: string) => Promise<{
     }
   }
 
+  const submit = () => {
+    const field = $<HTMLTextAreaElement>("[data-q]", box);
+    const q = field.value.trim();
+    if (!q) return;
+    field.value = "";                       // sent: ready for the next question
+    ask(q);
+  };
+
   box.addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
-    if (t.closest("[data-ask]")) {
-      const q = $<HTMLTextAreaElement>("[data-q]", box).value.trim();
-      if (q) ask(q);
-    } else if (t.closest("[data-openkey]")) {
-      document.dispatchEvent(new CustomEvent("open-key-panel"));
+    if (t.closest("[data-ask]")) submit();
+    else if (t.closest("[data-openkey]")) document.dispatchEvent(new CustomEvent("open-key-panel"));
+  });
+  // Enter sends, like a chat. Shift+Enter makes a new line. (isComposing: Enter confirms an IME character.)
+  box.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey && !e.isComposing && (e.target as HTMLElement).matches("[data-q]")) {
+      e.preventDefault();
+      submit();
     }
   });
 }
