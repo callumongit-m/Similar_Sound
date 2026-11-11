@@ -1060,3 +1060,21 @@ test("an open song never offers other drops, even when the analysis found some",
   expect($$("#detail .drops")).toHaveLength(0);
   expect(text).not.toMatch(/\b1:40\b|\b3:32\b/);                                              // the alternative times 100.5 s and 212.5 s are not shown anywhere
 });
+
+
+// ---------------- names fixed in the background show up without any action ----------------
+test("a song renamed by the service shows its new name on its own", async () => {
+  const realNow = Date.now();
+  const spy = vi.spyOn(Date, "now").mockReturnValue(realNow);
+  W.tracks = [{ ...T1, title: "Max Dean,Luke dean and Nafe smallz", artist: "Find my way home" }, T2];
+  await boot();
+  tab("collections");
+  expect($$("#unsorted .card .title").map((t) => t.textContent)).toContain("Max Dean,Luke dean and Nafe smallz");
+  W.tracks = [{ ...T1, title: "Find my way home", artist: "Max Dean, Luke dean and Nafe smallz" }, T2];      // the service fixed it
+  spy.mockReturnValue(realNow + 11_000);
+  await tick(1500);
+  const cards = $$("#unsorted .card");
+  expect(cards.map((c) => c.querySelector(".title")!.textContent)).toContain("Find my way home");
+  expect(cards.map((c) => c.querySelector(".sub")!.textContent)).toContain("Max Dean, Luke dean and Nafe smallz");
+  spy.mockRestore();
+});

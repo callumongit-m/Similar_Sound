@@ -17,3 +17,6 @@ export const openJobs = (): Job[] => (S.status?.jobs ?? []).filter((j) => j.stat
 
 /** How long to wait for the service before calling it "not running" (it takes about 10 to 20 seconds to start). */
 export const BOOT_GRACE_MS = 30_000;
+
+/** The song list is reloaded at least this often, so names the service fixes in the background show up by themselves. */
+export const LIBRARY_SYNC_MS = 10_000;

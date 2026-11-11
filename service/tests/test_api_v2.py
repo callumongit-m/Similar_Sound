@@ -47,7 +47,7 @@ def env(tmp_path):
             raise llm.LLMError("I don't recognise that key's company. Pick it from the list.", "unknown_provider")
         return llm.Creds(provider or "openai", key, "gpt-4.1-nano")
     app = create_app(store, JobQueue(store, lambda *a, **k: None, lambda: True, peek=lambda s: None), lst,
-                     client=lambda: state["gem"](), keys=keys, connect=connect)
+                     client=lambda: state["gem"](), keys=keys, connect=connect, backfill=lambda st: 0)
     with TestClient(app) as c:
         yield c, store, keys, spy, state
 

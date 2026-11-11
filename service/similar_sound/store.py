@@ -57,6 +57,18 @@ class Store:
                 self._db.execute("INSERT INTO vectors VALUES (?,?,?,?)", (doc["id"], kind, v.size, v.tobytes()))
             self._db.commit()
 
+    def update_track(self, track_id: str, **fields) -> bool:
+        """Change fields of a stored song in place (its document, and the title/artist columns the list reads)."""
+        with self._lock:
+            doc = self.get(track_id)
+            if doc is None:
+                return False
+            doc.update(fields)
+            self._db.execute("UPDATE tracks SET doc=?, title=?, artist=? WHERE id=?",
+                             (json.dumps(doc), doc.get("title", ""), doc.get("artist", ""), track_id))
+            self._db.commit()
+        return True
+
     def delete_track(self, track_id: str) -> bool:
         """Forget a song entirely: its analysis, its vectors and its place in every collection. (No audio is
         ever kept, so there is nothing else to delete.) Returns whether it existed."""

@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import hashlib
 from urllib.parse import urlsplit, urlunsplit
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from typing import Callable
 
 import librosa
@@ -74,6 +74,7 @@ def ingest(source: str, checkpoint: Callable[[], None] = lambda: None,
 
     doc.update({
         "id": track_id(source), "source": fetched.source, "title": fetched.title, "artist": fetched.artist,
+        "source_meta": asdict(fetched.meta),
         "segments": {"build": list(seg.build), "drop": list(seg.drop)},
         "detection_confidence": round(seg.confidence, 3),
         "alternative_drops": [round(t, 2) for t in seg.alternatives],

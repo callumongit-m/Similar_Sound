@@ -7,7 +7,7 @@ import { collectionsHtml, mountCollections, updateCollections } from "./collecti
 import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare";
 import { openDetail } from "./detail";
 import { keyPanelHtml, mountKeyPanel, toggleKeyPanel } from "./keypanel";
-import { BOOT_GRACE_MS, S } from "./state";
+import { BOOT_GRACE_MS, LIBRARY_SYNC_MS, S } from "./state";
 import { $, run, toast } from "./ui";
 
 // ---------- diagnostics: errors and startup go to ~/.similar_sound/app.log (via the Rust side) ----------
@@ -146,6 +146,7 @@ function render() {
 
 // ---------- polling ----------
 let doneCount = -1;
+let lastLibrarySync = 0;
 const bootStart = Date.now();
 async function refresh(force = false) {
   try {
@@ -153,8 +154,9 @@ async function refresh(force = false) {
     S.offline = false;
     S.booting = false;
     const done = S.status.jobs.filter((j) => j.status === "done").length;
-    if (done !== doneCount || force) {
+    if (done !== doneCount || force || Date.now() - lastLibrarySync > LIBRARY_SYNC_MS) {
       doneCount = done;
+      lastLibrarySync = Date.now();
       [S.tracks, S.collections] = await Promise.all([api.tracks(), api.collections()]);
     }
     if (!S.llm) S.llm = await api.llm();

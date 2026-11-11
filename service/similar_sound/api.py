@@ -11,7 +11,9 @@ from pathlib import Path
 
 from dataclasses import asdict
 
-from . import ableton, coach, config, keychain, library, listen, llm, pipeline, similarity
+import threading
+
+from . import ableton, coach, config, download, keychain, library, listen, llm, names, pipeline, rename, similarity
 from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
@@ -67,10 +69,11 @@ class Target(BaseModel):
 
 
 def create_app(store: Store | None = None, queue: JobQueue | None = None, listener: listen.Listener | None = None,
-               client=None, keys=keychain, connect=llm.connect) -> FastAPI:
+               client=None, keys=keychain, connect=llm.connect, backfill=rename.backfill) -> FastAPI:
     config.ensure_dirs()
     store = store or Store(config.DB_PATH)
-    queue = queue or JobQueue(store, pipeline.ingest, ableton.is_running)
+    queue = queue or JobQueue(store, pipeline.ingest, ableton.is_running,
+                              peek=lambda src: download.peek(src, names.known_artists(store)))
     listener = listener or listen.Listener(store)
     client = client or (lambda: llm.Client(store))
     comparison: dict = {}   # the latest comparison, so "ask about it" has something to talk about
@@ -94,6 +97,8 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     def _start():
         os.nice(10)  # keep audio threads ahead of us
         queue.start()
+        # Songs analysed before their raw names were kept get them (and their names fixed) in the background.
+        threading.Thread(target=backfill, args=(store,), daemon=True, name="name-backfill").start()
 
     @app.post("/jobs")
     def add_job(body: NewJob):

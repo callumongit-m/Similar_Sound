@@ -16,7 +16,7 @@ from typing import Callable
 
 import re
 
-from . import download
+from . import download, rename
 from .pipeline import TrackRecord, track_id
 from .pipeline import track_id as tid
 from .segment import DropNotFound
@@ -153,6 +153,10 @@ class JobQueue:
                 rec = self._ingest(source, checkpoint=self._hold,
                                    progress=lambda s, j=job_id: self._set(j, stage=s))
                 self._store.add(rec.doc, rec.vectors)
+                try:   # now the library can say who is already an artist here: settle which side of "X - Y" is which
+                    rename.refresh(self._store, rec.doc["id"])
+                except Exception:  # noqa: BLE001 - a naming nicety must never fail a finished analysis
+                    pass
                 self._set(job_id, status="done", stage="", track_id=rec.doc["id"])
             except DropNotFound as e:  # not a failure: the user can unblock it with one timestamp
                 self._set(job_id, status="needs_timestamp", error=str(e), stage="")
