@@ -1,31 +1,79 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::{
+    net::TcpStream,
+    os::unix::process::CommandExt,
+    path::PathBuf,
+    process::{Child, Command, Stdio},
+    sync::Mutex,
+    time::Duration,
+};
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    AppHandle, Manager, WindowEvent,
+    AppHandle, Manager, RunEvent, WindowEvent,
 };
 
-fn toggle_window(app: &AppHandle) {
-    if let Some(w) = app.get_webview_window("main") {
-        if w.is_visible().unwrap_or(false) {
-            let _ = w.hide();
-        } else {
-            let _ = w.show();
-            let _ = w.set_focus();
+/// The Python service, if this app had to start it (so it only stops what it started).
+struct Service(Mutex<Option<Child>>);
+
+fn service_up() -> bool {
+    TcpStream::connect_timeout(&"127.0.0.1:8765".parse().unwrap(), Duration::from_millis(300)).is_ok()
+}
+
+/// Start service/run.sh unless a service is already answering. Its own process group, so that
+/// quitting the app can stop uv *and* the uvicorn it spawned.
+fn start_service() -> Option<Child> {
+    if service_up() {
+        return None;
+    }
+    let script = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../service/run.sh");
+    Command::new("/bin/bash")
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .ok()
+}
+
+fn stop_service(app: &AppHandle) {
+    if let Some(state) = app.try_state::<Service>() {
+        if let Some(child) = state.0.lock().unwrap().take() {
+            let _ = Command::new("kill").args(["-TERM", &format!("-{}", child.id())]).status();
         }
     }
 }
 
-// The window is a thin shell: all behaviour lives in the Python service on localhost:8765.
-// The app lives in the menu bar (a sheet-music note) so you can tell it is running; the window
-// hides instead of quitting, and the note's menu has Quit.
+fn show_window(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window("main") {
+        let _ = w.show();
+        let _ = w.set_focus();
+    }
+}
+
+fn toggle_window(app: &AppHandle) {
+    match app.get_webview_window("main") {
+        Some(w) if w.is_visible().unwrap_or(false) => {
+            let _ = w.hide();
+        }
+        _ => show_window(app),
+    }
+}
+
+// The window is a thin shell: all behaviour lives in the Python service on localhost:8765, which this
+// app starts if needed. It lives in the menu bar (a sheet-music note) so you can tell it is running;
+// the window hides instead of quitting, and the note's menu has Quit.
 fn main() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
+        .manage(Service(Mutex::new(None)))
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon
+
+            *app.state::<Service>().0.lock().unwrap() = start_service();
 
             let show = MenuItem::with_id(app, "show", "Show Similar Sound", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
@@ -38,7 +86,7 @@ fn main() {
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "show" => toggle_window(app),
+                    "show" => show_window(app),
                     "quit" => app.exit(0),
                     _ => {}
                 })
@@ -61,6 +109,14 @@ fn main() {
                 let _ = window.hide();
             }
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Similar Sound");
+        .build(tauri::generate_context!())
+        .expect("error while building Similar Sound");
+
+    app.run(|handle, event| match event {
+        // Opening the app again (Finder, Launchpad, Spotlight) while it is hidden brings the window back.
+        #[cfg(target_os = "macos")]
+        RunEvent::Reopen { .. } => show_window(handle),
+        RunEvent::Exit => stop_service(handle),
+        _ => {}
+    });
 }
