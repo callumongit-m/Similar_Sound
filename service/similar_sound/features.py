@@ -6,6 +6,7 @@ from __future__ import annotations
 import librosa
 import numpy as np
 import pyloudnorm as pyln
+from scipy.signal import find_peaks
 
 SR = 44100
 BAND_EDGES = [20, 60, 120, 250, 500, 2000, 6000, 12000, 20000]  # 8 bands
@@ -15,6 +16,8 @@ GROOVE_BANDS = {"kick": (20, 200), "mid": (200, 6000), "hat": (6000, 16000)}
 HOP = 128
 GROOVE_DIM = 3 * 48 + 1 + 3  # per band: 16 hit + 16 offset + 16 velocity; + swing + 3 densities
 N_FFT = 2048
+ONSET_PROMINENCE = 0.15  # of the lane's loud level; below this a bump is wobble, not a hit
+MIN_ONSET_GAP_S = 0.06    # no two hits in one lane closer than this (a 16th at 128 bpm is 117 ms)
 
 
 def _power(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
@@ -78,17 +81,27 @@ def _stem_metrics(stereo: np.ndarray) -> dict:
 
 
 def _onsets(mono: np.ndarray, lo: float, hi: float) -> tuple[np.ndarray, np.ndarray]:
+    """Hits in one frequency lane: peaks of the band's energy envelope. (Spectral flux, used before,
+    fired on every wobble of a rolling sub-bass: 14 "kicks" a bar on a four-on-the-floor track.)
+    Time = where the envelope first reaches half its peak: peaks lag the attack by the attack time,
+    which differs per lane and would otherwise bias swing."""
     # The clip starts on the downbeat, so a hit at t=0 has no preceding frame to rise from.
-    # Pad with silence so flux sees it, then shift times back.
     pad = int(0.1 * SR)
     S, f = _power(np.concatenate([np.zeros(pad), mono]))
-    band = np.log1p(np.sqrt(S[(f >= lo) & (f < hi)]) * 10)
-    env = np.maximum(0, np.diff(band, axis=1, prepend=band[:, :1])).sum(axis=0)
-    if env.max() <= 0:
+    e = S[(f >= lo) & (f < hi)].sum(axis=0)
+    if e.max() <= 0:
         return np.array([]), np.array([])
-    env = env / env.max()
-    frames = librosa.onset.onset_detect(onset_envelope=env, sr=SR, hop_length=HOP, backtrack=False)
-    return librosa.frames_to_time(frames, sr=SR, hop_length=HOP) - pad / SR, env[frames]
+    e = e / (np.percentile(e, 99) + 1e-12)
+    e = np.convolve(e, np.hanning(5) / np.hanning(5).sum(), mode="same")
+    peaks, _ = find_peaks(e, prominence=ONSET_PROMINENCE, distance=max(int(MIN_ONSET_GAP_S * SR / HOP), 1))
+    starts = []
+    for k, p in enumerate(peaks):
+        floor = peaks[k - 1] if k else 0  # never walk back into the previous hit
+        i = p
+        while i > floor and e[i - 1] >= 0.5 * e[p]:
+            i -= 1
+        starts.append(i)
+    return np.array(starts) * HOP / SR - pad / SR, e[peaks]
 
 
 def _fit_grid(times: np.ndarray, weights: np.ndarray, bpm: float) -> tuple[float, float]:
@@ -106,41 +119,54 @@ def _fit_grid(times: np.ndarray, weights: np.ndarray, bpm: float) -> tuple[float
 
 
 def groove(drums_mono: np.ndarray, bpm: float) -> dict:
-    """Per-band 16-step pattern, micro-timing and velocity. Offsets are fractions of a 16th."""
+    """Per-lane 16-step pattern, micro-timing and velocity. Offsets are fractions of a 16th.
+    Step 0 is the beat the kick lands on: the clip starts at the drop's first low-end entry, which on
+    real tracks is often an off-beat bass note, so the kick (not the clip start) defines the downbeat.
+    That also fixes 16th parity, so swing cannot flip sign."""
     per = {name: _onsets(drums_mono, lo, hi) for name, (lo, hi) in GROOVE_BANDS.items()}
     all_t = np.concatenate([t for t, _ in per.values()])
     all_w = np.concatenate([w for _, w in per.values()])
     if all_t.size < 8:
         return {"empty": True, "vector": [0.0] * GROOVE_DIM}
     step, phase = _fit_grid(all_t, all_w, bpm)
-    # The clip starts on the drop's downbeat, so anchor step 0 to the grid point nearest t=0.
     phase = phase % step
     if phase > step / 2:
         phase -= step
     nbars = max(len(drums_mono) / SR / (16 * step), 1e-9)
 
-    out, vec = {"step_s": round(step, 5), "bpm_fit": round(60 / step / 4, 2)}, []
-    odd, even = [], []
+    grid = {}
     for name, (t, w) in per.items():
+        rel = (t - phase) / step
+        idx = np.round(rel).astype(int)
+        grid[name] = (idx, rel - idx, w)
+    # Rotate so the kick sits on steps 0, 4, 8, 12 (the clip may start up to 3 steps off the downbeat).
+    kick_idx = grid["kick"][0]
+    shift = int(np.argmax([np.sum((kick_idx - r) % 4 == 0) for r in range(4)])) if kick_idx.size else 0
+
+    out, vec = {"step_s": round(step, 5), "bpm_fit": round(60 / step / 4, 2)}, []
+    lane_swings, odd_cross, even_all = [], [], []
+    for name, (idx, d, w) in grid.items():
         hit, off, vel = np.zeros(16), np.zeros(16), np.zeros(16)
-        if t.size:
-            rel = (t - phase) / step
-            idx = np.round(rel).astype(int)
-            d = rel - idx
-            pos = idx % 16
-            for p in range(16):
-                m = pos == p
-                if m.any():
-                    hit[p] = min(m.sum() / nbars, 1.0)
-                    off[p] = float(d[m].mean())
-                    vel[p] = float(w[m].mean())
-            if name != "kick":
-                odd += list(d[pos % 2 == 1])
-                even += list(d[pos % 2 == 0])
+        pos = (idx - shift) % 16
+        for p in range(16):
+            m = pos == p
+            if m.any():
+                hit[p] = min(m.sum() / nbars, 1.0)
+                off[p] = float(d[m].mean())
+                vel[p] = float(w[m].mean())
+        even_all += list(d[pos % 2 == 0])
+        if name != "kick":
+            odd_cross += list(d[pos % 2 == 1])
+            o, e = d[pos % 2 == 1], d[pos % 2 == 0]
+            if len(o) >= 3 and len(e) >= 3:  # same-lane comparison: immune to per-lane onset latency
+                lane_swings.append(float(np.mean(o) - np.mean(e)))
         out[name] = {"hit": hit.round(3).tolist(), "offset": off.round(3).tolist(),
-                     "velocity": vel.round(3).tolist(), "density_per_bar": round(float(t.size / nbars), 2)}
+                     "velocity": vel.round(3).tolist(), "density_per_bar": round(float(len(idx) / nbars), 2)}
         vec += list(hit) + list(off * 2) + list(vel)
-    swing = (np.mean(odd) if odd else 0.0) - (np.mean(even) if even else 0.0)
+    if lane_swings:
+        swing = float(np.mean(lane_swings))
+    else:  # off-beat-only lanes (typical hats): measure against the on-beat events instead
+        swing = (np.mean(odd_cross) if odd_cross else 0.0) - (np.mean(even_all) if even_all else 0.0)
     out["swing"] = round(float(swing), 4)
     vec += [swing * 2] + [out[n]["density_per_bar"] / 16 for n in GROOVE_BANDS]
     out["vector"] = [round(float(v), 4) for v in vec]

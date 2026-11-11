@@ -33,3 +33,22 @@ def test_bpm_drift_tolerated():
 def test_empty_drums_degrade_gracefully():
     g = features.groove(np.zeros(44100 * 10), 124)
     assert g.get("empty") and len(g["vector"]) == features.GROOVE_DIM
+
+
+def _cut_steps(x, steps, bpm=124):
+    return x[int(steps * 60 / bpm / 4 * 44100):]
+
+
+def test_kick_defines_step_zero_whatever_the_clip_start():
+    # Real clips start at the drop's first low-end entry, often off the kick's downbeat. Step 0 must
+    # be the kick's beat regardless, or every pattern comparison between tracks is rotated.
+    for steps in (0, 1, 2, 3):
+        g = features.groove(_cut_steps(drums(swing=0.0, bars=10), steps), 124)
+        assert [i for i, h in enumerate(g["kick"]["hit"]) if h > 0.5] == [0, 4, 8, 12], steps
+
+
+def test_swing_sign_survives_an_off_by_one_step_clip_start():
+    # Cutting one step flips 16th parity: swing used to come out negative (a real bug on real audio).
+    for steps in (0, 1, 2, 3):
+        g = features.groove(_cut_steps(drums(swing=0.25, bars=10), steps), 124)
+        assert g["swing"] > 0.12, (steps, g["swing"])

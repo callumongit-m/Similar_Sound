@@ -23,6 +23,30 @@ class Fetched:
     drop_start_override: float | None
 
 
+def split_title(title: str, uploader: str = "") -> tuple[str, str]:
+    """(song, artist). SoundCloud titles are usually "Artist - Song"; the uploader is often a label or
+    a promoter rather than the artist, so the title wins when it has that shape."""
+    t = (title or "").strip()
+    if " - " in t:
+        artist, song = t.split(" - ", 1)
+        return song.strip(), artist.strip()
+    return t, (uploader or "").strip()
+
+
+def peek(source: str) -> tuple[str, str] | None:
+    """(song, artist) without downloading audio (about a second), so the UI can show the real name
+    the moment a link is pasted. None if it cannot be read; the pipeline still fills it in later."""
+    base = source.partition("#")[0]
+    local = Path(base).expanduser()
+    if local.exists():
+        return local.stem, ""
+    import yt_dlp
+
+    with yt_dlp.YoutubeDL({"quiet": True, "skip_download": True, "noplaylist": True}) as ydl:
+        info = ydl.extract_info(base, download=False)
+    return split_title(info.get("title", ""), info.get("uploader", ""))
+
+
 def _parse_override(fragment: str) -> float | None:
     m = re.search(r"t=(?:(\d+):)?(\d+(?:\.\d+)?)$", fragment)
     if not m:
@@ -55,7 +79,8 @@ def fetch(source: str) -> Fetched:
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(base, download=True)
     wav = next(work.glob("audio.wav"))
-    return Fetched(wav, info.get("title", ""), info.get("uploader", ""), base, override)
+    song, artist = split_title(info.get("title", ""), info.get("uploader", ""))
+    return Fetched(wav, song, artist, base, override)
 
 
 def cleanup(fetched: Fetched) -> None:

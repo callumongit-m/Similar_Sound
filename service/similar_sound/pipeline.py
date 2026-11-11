@@ -6,6 +6,7 @@ gets `checkpoint()` between stages so the queue can hold work while Ableton is o
 from __future__ import annotations
 
 import hashlib
+from urllib.parse import urlsplit, urlunsplit
 from dataclasses import dataclass
 from typing import Callable
 
@@ -22,7 +23,13 @@ class TrackRecord:
 
 
 def track_id(source: str) -> str:
-    return hashlib.sha1(source.partition("#")[0].strip().encode()).hexdigest()[:12]
+    """Stable id for a track. SoundCloud's share button appends ?si=...&utm_... and a `#t=` override
+    pins a drop: none of those change which song it is, so none may create a second library entry."""
+    base = source.partition("#")[0].strip()
+    parts = urlsplit(base)
+    if parts.netloc.lower().endswith("soundcloud.com"):  # on soundcloud.com the path is the identity
+        base = urlunsplit((parts.scheme, parts.netloc.lower(), parts.path.rstrip("/"), "", ""))
+    return hashlib.sha1(base.encode()).hexdigest()[:12]
 
 
 def _load_stereo(path, sr: int) -> np.ndarray:

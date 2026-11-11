@@ -2,7 +2,7 @@
 const BASE = "http://127.0.0.1:8765";
 
 export type JobStatus = "pending" | "running" | "done" | "error" | "needs_timestamp";
-export interface Job { id: number; source: string; status: JobStatus; stage: string; error: string | null; track_id: string | null }
+export interface Job { id: number; source: string; status: JobStatus; stage: string; error: string | null; title: string | null; artist: string | null; track_key: string }
 export type QueueState = "idle" | "working" | "paused_ableton" | "paused_user";
 export interface Status { state: QueueState; jobs: Job[] }
 export interface TrackSummary { id: string; title: string; artist: string; source: string; bpm: number | null; key: string | null }
@@ -35,6 +35,7 @@ export const api = {
   status: () => call<Status>("/status"),
   addJob: (url: string) => post("/jobs", { url }),
   giveTimestamp: (jobId: number, timestamp: string) => post(`/jobs/${jobId}/timestamp`, { timestamp }),
+  dismiss: (jobId: number) => call<any>(`/jobs/${jobId}`, { method: "DELETE" }),
   pause: () => post("/pause"),
   resume: () => post("/resume"),
   tracks: () => call<TrackSummary[]>("/tracks"),

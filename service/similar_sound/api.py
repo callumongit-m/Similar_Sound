@@ -55,6 +55,14 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None) -> Fas
             raise HTTPException(400, str(e))
         return {"id": job_id, "status": "pending"}
 
+    @app.delete("/jobs/{job_id}")
+    def dismiss_job(job_id: int):
+        try:
+            queue.dismiss(job_id)
+        except KeyError:
+            raise HTTPException(404, "only failed or waiting-for-timestamp jobs can be dismissed")
+        return {"id": job_id}
+
     @app.get("/status")
     def status():
         return queue.status()

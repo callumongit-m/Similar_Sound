@@ -27,7 +27,7 @@ def wait(cond, t=5.0):
 
 def make(tmp_path, ableton):
     s = Store(tmp_path / "t.db")
-    q = JobQueue(s, fake_ingest, lambda: ableton["on"], poll_s=0.02)
+    q = JobQueue(s, fake_ingest, lambda: ableton["on"], poll_s=0.02, peek=lambda s: None)
     return s, q
 
 
@@ -87,7 +87,7 @@ def test_duplicate_url_deduped(tmp_path):
 def test_crash_recovery_requeues_running(tmp_path):
     s = Store(tmp_path / "t.db")
     s.execute("INSERT INTO jobs(source,status,stage,created,updated) VALUES ('a','running','stems',0,0)")
-    q = JobQueue(s, fake_ingest, lambda: False, poll_s=0.02)
+    q = JobQueue(s, fake_ingest, lambda: False, poll_s=0.02, peek=lambda s: None)
     q.start()
     assert wait(lambda: done(q, 1))
     q.stop()
@@ -112,7 +112,7 @@ def test_drop_not_found_parks_job_with_message_then_resumes_on_timestamp(tmp_pat
         return fake_ingest(source, checkpoint, progress)
 
     s = Store(tmp_path / "t.db")
-    q = JobQueue(s, ingest, lambda: False, poll_s=0.02)
+    q = JobQueue(s, ingest, lambda: False, poll_s=0.02, peek=lambda s: None)
     q.start()
     jid = q.enqueue("https://soundcloud.com/a/b")
     assert wait(lambda: any(j["status"] == "needs_timestamp" for j in q.status()["jobs"]))
@@ -137,3 +137,55 @@ def test_timestamp_validation_and_wrong_job(tmp_path):
         q.provide_timestamp(jid, "banana")
     q.provide_timestamp(jid, "184")
     assert q.status()["jobs"][0]["source"] == "a#t=184"
+
+
+def test_split_title_prefers_artist_dash_song_over_uploader():
+    from similar_sound.download import split_title
+    assert split_title("MAX DEAN - TALKING WITH MYSELF (UNRELEASED)", "J8") == ("TALKING WITH MYSELF (UNRELEASED)", "MAX DEAN")
+    assert split_title("Temptation", "obp") == ("Temptation", "obp")
+    assert split_title("A - B - C", "x") == ("B - C", "A")  # only the first dash splits
+
+
+def test_job_is_named_at_enqueue_not_after_analysis(tmp_path):
+    s = Store(tmp_path / "t.db")
+    q = JobQueue(s, fake_ingest, lambda: True, poll_s=0.02, peek=lambda src: ("Temptation", "obp"))  # worker held: Ableton open
+    q.enqueue("https://soundcloud.com/obpofficial/temptation-5?si=abc")
+    assert wait(lambda: q.status()["jobs"][0]["title"] == "Temptation")
+    job = q.status()["jobs"][0]
+    assert job["artist"] == "obp" and job["status"] == "pending"   # named while still waiting
+
+
+def test_a_failing_peek_never_breaks_the_job(tmp_path):
+    def boom(src):
+        raise RuntimeError("network down")
+    s = Store(tmp_path / "t.db")
+    q = JobQueue(s, fake_ingest, lambda: False, poll_s=0.02, peek=boom)
+    q.start(); q.enqueue("a")
+    assert wait(lambda: done(q, 1)); q.stop()
+
+
+def test_status_carries_the_track_key_from_the_start(tmp_path):
+    s, q = make(tmp_path, {"on": True})
+    q.enqueue("https://soundcloud.com/x/y?si=1")
+    assert q.status()["jobs"][0]["track_key"] == track_id("https://soundcloud.com/x/y")  # tracking params ignored
+
+
+def test_dismiss_only_failed_or_stuck_jobs(tmp_path):
+    import pytest
+    s, q = make(tmp_path, {"on": True})
+    jid = q.enqueue("a")
+    with pytest.raises(KeyError):
+        q.dismiss(jid)                     # pending work cannot be dismissed
+    s.execute("UPDATE jobs SET status='error' WHERE id=?", (jid,))
+    q.dismiss(jid)
+    assert q.status()["jobs"] == []
+
+
+def test_same_soundcloud_song_shared_differently_is_one_track():
+    a = "https://soundcloud.com/obpofficial/temptation-5?si=b60c&utm_source=clipboard&utm_medium=text"
+    b = "https://soundcloud.com/obpofficial/temptation-5"
+    c = "https://soundcloud.com/obpofficial/temptation-5/#t=2:30"
+    assert track_id(a) == track_id(b) == track_id(c)
+    assert track_id("https://soundcloud.com/obpofficial/temptation-6") != track_id(b)
+    # other sites keep their query: youtube's ?v= IS the identity
+    assert track_id("https://youtube.com/watch?v=aaa") != track_id("https://youtube.com/watch?v=bbb")

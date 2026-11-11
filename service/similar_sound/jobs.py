@@ -14,6 +14,7 @@ from typing import Callable
 
 import re
 
+from . import download
 from .pipeline import TrackRecord, track_id
 from .segment import DropNotFound
 from .store import Store
@@ -21,8 +22,10 @@ from .store import Store
 
 class JobQueue:
     def __init__(self, store: Store, ingest: Callable[..., TrackRecord],
-                 ableton_running: Callable[[], bool], poll_s: float = 1.0):
+                 ableton_running: Callable[[], bool], poll_s: float = 1.0,
+                 peek: Callable[[str], tuple[str, str] | None] = download.peek):
         self._store, self._ingest, self._ableton, self._poll = store, ingest, ableton_running, poll_s
+        self._peek = peek
         self._user_paused = False
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
@@ -39,7 +42,26 @@ class JobQueue:
         now = time.time()
         self._store.execute("INSERT INTO jobs(source,status,stage,created,updated) VALUES (?,?,?,?,?)",
                             (source, "pending", "", now, now))
-        return self._store.execute("SELECT max(id) AS i FROM jobs")[0]["i"]
+        job_id = self._store.execute("SELECT max(id) AS i FROM jobs")[0]["i"]
+        threading.Thread(target=self._name_job, args=(job_id, source), daemon=True).start()
+        return job_id
+
+    def _name_job(self, job_id: int, source: str) -> None:
+        """Fetch the real song name and artist right away (cheap, not the heavy work), so the card can
+        show them while the job waits or runs. Failure just leaves the name to the pipeline."""
+        try:
+            named = self._peek(source)
+        except Exception:  # noqa: BLE001 - a missing name must never break a job
+            return
+        if named:
+            self._set(job_id, title=named[0], artist=named[1])
+
+    def dismiss(self, job_id: int) -> None:
+        """Remove a failed / stuck job from the list (finished jobs live on as library tracks)."""
+        rows = self._store.execute("SELECT status FROM jobs WHERE id=?", (job_id,))
+        if not rows or rows[0]["status"] not in ("error", "needs_timestamp"):
+            raise KeyError(job_id)
+        self._store.execute("DELETE FROM jobs WHERE id=?", (job_id,))
 
     def provide_timestamp(self, job_id: int, timestamp: str) -> None:
         """Answer a `needs_timestamp` job: "3:04" or "184" re-queues it with the drop pinned there."""
@@ -65,8 +87,12 @@ class JobQueue:
         return "working" if self._working else "idle"
 
     def status(self) -> dict:
-        jobs = [dict(r) for r in self._store.execute(
-            "SELECT id,source,status,stage,error,track_id FROM jobs ORDER BY id DESC LIMIT 50")]
+        jobs = []
+        for r in self._store.execute(
+                "SELECT id,source,status,stage,error,title,artist FROM jobs ORDER BY id DESC LIMIT 50"):
+            # track_key: the library id this job produces, known from the start, so one card can follow
+            # a track from "analysing" to "analysed" without being replaced.
+            jobs.append({**dict(r), "track_key": track_id(r["source"])})
         return {"state": self.state(), "jobs": jobs}
 
     def start(self) -> None:

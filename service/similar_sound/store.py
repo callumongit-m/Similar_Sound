@@ -17,7 +17,8 @@ CREATE TABLE IF NOT EXISTS tracks(id TEXT PRIMARY KEY, source TEXT, title TEXT, 
 CREATE TABLE IF NOT EXISTS vectors(track_id TEXT, kind TEXT, dim INTEGER, data BLOB,
                                    PRIMARY KEY(track_id, kind));
 CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, status TEXT,
-                                stage TEXT, error TEXT, track_id TEXT, created REAL, updated REAL);
+                                stage TEXT, error TEXT, track_id TEXT, created REAL, updated REAL,
+                                title TEXT, artist TEXT);
 """
 
 
@@ -28,6 +29,10 @@ class Store:
         self._lock = threading.RLock()
         with self._lock:
             self._db.executescript(SCHEMA)
+            cols = {r["name"] for r in self._db.execute("PRAGMA table_info(jobs)")}
+            for col in ("title", "artist"):  # libraries created before jobs carried a name
+                if col not in cols:
+                    self._db.execute(f"ALTER TABLE jobs ADD COLUMN {col} TEXT")
 
     def execute(self, sql: str, args: tuple = ()) -> list[sqlite3.Row]:
         with self._lock:

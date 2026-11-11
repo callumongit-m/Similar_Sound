@@ -18,7 +18,7 @@ def ingest(source, checkpoint=lambda: None, progress=lambda s: None):
 
 def test_user_is_asked_for_timestamp_and_can_answer_over_http(tmp_path):
     store = Store(tmp_path / "a.db")
-    queue = JobQueue(store, ingest, lambda: False, poll_s=0.02)
+    queue = JobQueue(store, ingest, lambda: False, poll_s=0.02, peek=lambda s: None)
     with TestClient(create_app(store, queue)) as c:
         jid = c.post("/jobs", json={"url": "https://soundcloud.com/x/y"}).json()["id"]
         deadline = time.time() + 5
