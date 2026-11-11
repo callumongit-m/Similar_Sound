@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import threading
 import time
-import traceback
+import logging
 from typing import Callable
 
 import re
@@ -21,6 +21,8 @@ from .pipeline import TrackRecord, track_id
 from .pipeline import track_id as tid
 from .segment import DropNotFound
 from .store import Store
+
+log = logging.getLogger("similar_sound.queue")
 
 
 class JobQueue:
@@ -132,7 +134,17 @@ class JobQueue:
 
     def _hold(self) -> None:
         while not self._may_run() and not self._stop.is_set():
+            self._note_hold()
             time.sleep(self._poll)
+        self._note_hold()
+
+    def _note_hold(self) -> None:
+        """Log when the queue stops or starts holding (and why), not every second it holds."""
+        held = self.state() if not self._may_run() else "running"
+        if held != getattr(self, "_logged_hold", "running"):
+            log.info("queue %s", {"paused_user": "paused by you", "paused_ableton": "paused: Ableton is open",
+                                  "running": "running again"}.get(held, held))
+        self._logged_hold = held
 
     def _set(self, job_id: int, **cols) -> None:
         cols["updated"] = time.time()
@@ -149,6 +161,8 @@ class JobQueue:
             job_id, source = rows[0]["id"], rows[0]["source"]
             self._set(job_id, status="running")
             self._working = True
+            started = time.time()
+            log.info("job %s started: %s", job_id, source)
             try:
                 rec = self._ingest(source, checkpoint=self._hold,
                                    progress=lambda s, j=job_id: self._set(j, stage=s))
@@ -158,10 +172,13 @@ class JobQueue:
                 except Exception:  # noqa: BLE001 - a naming nicety must never fail a finished analysis
                     pass
                 self._set(job_id, status="done", stage="", track_id=rec.doc["id"])
+                log.info("job %s done in %.0fs: %s - %s (%s bpm, %s)", job_id, time.time() - started,
+                         rec.doc.get("artist"), rec.doc.get("title"), rec.doc.get("bpm"), rec.doc.get("key"))
             except DropNotFound as e:  # not a failure: the user can unblock it with one timestamp
                 self._set(job_id, status="needs_timestamp", error=str(e), stage="")
+                log.info("job %s needs a timestamp: %s", job_id, e)
             except Exception as e:  # one bad URL must not stop the queue
-                traceback.print_exc()
+                log.exception("job %s failed: %s", job_id, source)
                 self._set(job_id, status="error", error=str(e)[:300])
             finally:
                 self._working = False

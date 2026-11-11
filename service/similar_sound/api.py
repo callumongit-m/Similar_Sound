@@ -11,12 +11,15 @@ from pathlib import Path
 
 from dataclasses import asdict
 
+import logging
 import threading
 
-from . import ableton, coach, config, download, keychain, library, listen, llm, models, names, pipeline, rename, similarity
+from . import logsetup, ableton, coach, config, download, keychain, library, listen, llm, models, names, pipeline, rename, similarity
 from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
+
+log = logging.getLogger("similar_sound.api")
 
 
 class NewJob(BaseModel):
@@ -71,6 +74,8 @@ class Target(BaseModel):
 def create_app(store: Store | None = None, queue: JobQueue | None = None, listener: listen.Listener | None = None,
                client=None, keys=keychain, connect=llm.connect, backfill=rename.backfill) -> FastAPI:
     config.ensure_dirs()
+    if store is None:                       # the real service (tests pass their own store and must not write the real log)
+        logsetup.setup(config.LOG_PATH)
     store = store or Store(config.DB_PATH)
     queue = queue or JobQueue(store, pipeline.ingest, ableton.is_running,
                               peek=lambda src: download.peek(src, names.known_artists(store)))
@@ -83,6 +88,7 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
         try:
             return fn(client())
         except llm.LLMError as e:
+            log.warning("language model call failed (%s): %s", e.code, e)
             raise HTTPException(503, {"message": str(e), "code": e.code})
 
     def library_call(fn):
@@ -93,8 +99,17 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     app = FastAPI(title="Similar_Sound")
     app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+    @app.middleware("http")
+    async def log_failures(request, call_next):
+        """Requests that fail are worth a line; the window's constant successful polling is not."""
+        response = await call_next(request)
+        if response.status_code >= 400:
+            log.warning("%s %s -> %s", request.method, request.url.path, response.status_code)
+        return response
+
     @app.on_event("startup")
     def _start():
+        log.info("service started (%d songs in the library)", len(store.list()))
         os.nice(10)  # keep audio threads ahead of us
         queue.start()
         # Songs analysed before their raw names were kept get them (and their names fixed) in the background.

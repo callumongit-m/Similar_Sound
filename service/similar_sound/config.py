@@ -4,6 +4,7 @@ from pathlib import Path
 
 DATA_DIR = Path(os.environ.get("SIMILAR_SOUND_DATA", Path.home() / ".similar_sound"))
 DB_PATH = DATA_DIR / "library.db"
+LOG_PATH = DATA_DIR / "service.log"
 TMP_DIR = DATA_DIR / "tmp"
 
 SCHEMA_VERSION = 1

@@ -9,6 +9,7 @@ to load them again. Calls are made one at a time, so two analyses never fight ov
 """
 from __future__ import annotations
 
+import logging
 import multiprocessing as mp
 import threading
 import time
@@ -16,6 +17,8 @@ import time
 import numpy as np
 
 from . import modelworker
+
+log = logging.getLogger("similar_sound.models")
 
 IDLE_UNLOAD_S = 600       # not used for this long: give the memory back
 WATCH_EVERY_S = 30
@@ -36,6 +39,7 @@ def _start_locked() -> None:
     proc.start()
     child.close()
     _worker = (proc, parent)
+    log.info("analysis models loading (worker pid %s)", proc.pid)
     if _watcher is None or not _watcher.is_alive():
         _watcher = threading.Thread(target=_watch, daemon=True, name="model-idle-watch")
         _watcher.start()
@@ -51,6 +55,7 @@ def _stop_locked() -> bool:
         conn.send(("quit",))
     except (OSError, ValueError):
         pass
+    log.info("analysis models unloaded (worker pid %s)", proc.pid)
     proc.join(5)
     if proc.is_alive():
         proc.terminate()
@@ -79,6 +84,7 @@ def _call(name: str, *args):
                 status, payload = _worker[1].recv()
                 break
             except (EOFError, BrokenPipeError, OSError):      # it died mid-call: start a fresh one, once
+                log.warning("analysis worker died mid-call (attempt %d)", attempt)
                 _stop_locked()
                 if attempt == 2:
                     raise RuntimeError("The analysis engine stopped unexpectedly. Try again.") from None

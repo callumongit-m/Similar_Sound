@@ -8,6 +8,7 @@ only the rules: what counts as playing, when it has stopped, what is too short t
 from __future__ import annotations
 
 import json
+import logging
 import os
 import shutil
 import subprocess
@@ -19,6 +20,8 @@ from typing import Callable, Iterator, Protocol
 
 from . import ableton, config, project
 from .store import Store
+
+log = logging.getLogger("similar_sound.listen")
 
 PLAYING = 0.004          # rms (about -48 dBFS) above which Ableton counts as playing
 STOP_AFTER_QUIET_S = 2.0
@@ -66,7 +69,7 @@ class AbletonTap:
         code = self._p.wait()
         report = (self._p.stderr.read() or "").strip()
         if report:
-            print(f"audiotap (exit {code}): " + " | ".join(report.splitlines()[-4:]), flush=True)   # lands in ~/.similar_sound/service.log
+            log.info("audiotap (exit %s): %s", code, " | ".join(report.splitlines()[-4:]))
         if code not in (0, -2, -15):              # not a normal stop
             err = report.splitlines()
             if code == 4:
@@ -109,6 +112,7 @@ class Listener:
                 return
             self._cancel.clear()
             self._reset()
+            log.info("listening for your project")
             self.state = "waiting"
             self._thread = threading.Thread(target=self._run, daemon=True, name="listener")
             self._thread.start()
@@ -155,9 +159,11 @@ class Listener:
             self._finish(wav)
         except (TapError, project.ProjectError) as e:
             self.state, self.message = "error", str(e)
+            log.warning("listening failed: %s", e)
             if self._heard_levels and isinstance(e, project.ProjectError) and str(e).startswith("I didn't hear anything"):
                 self.message = "I could hear Ableton, but my recording came out empty. That's a bug on my side; the details are in ~/.similar_sound/service.log."
         except Exception:                                    # noqa: BLE001
+            log.exception("listening crashed")
             self.state, self.message = "error", "Something went wrong while listening. Try again."
         finally:
             try:
@@ -207,3 +213,4 @@ class Listener:
         self.project_id = self._store.execute("SELECT max(id) AS i FROM projects")[0]["i"]
         self._store.prune_projects()
         self.project, self.state, self.message = doc, "ready", ""
+        log.info("heard your project: %.0f bpm, %s", doc.get("bpm") or 0, doc.get("key"))
