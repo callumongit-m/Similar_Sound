@@ -7,7 +7,7 @@ DB_PATH = DATA_DIR / "library.db"
 LOG_PATH = DATA_DIR / "service.log"
 TMP_DIR = DATA_DIR / "tmp"
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2   # 2: adds doc["loops"] (what each layer plays, bar by bar)
 DEMUCS_MODEL = "htdemucs"
 CLAP_MODEL = "laion/clap-htsat-unfused"
 

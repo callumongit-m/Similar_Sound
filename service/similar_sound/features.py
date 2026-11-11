@@ -80,7 +80,7 @@ def _stem_metrics(stereo: np.ndarray) -> dict:
     }
 
 
-def _onsets(mono: np.ndarray, lo: float, hi: float) -> tuple[np.ndarray, np.ndarray]:
+def lane_onsets(mono: np.ndarray, lo: float, hi: float, prominence: float = ONSET_PROMINENCE) -> tuple[np.ndarray, np.ndarray]:
     """Hits in one frequency lane: peaks of the band's energy envelope. (Spectral flux, used before,
     fired on every wobble of a rolling sub-bass: 14 "kicks" a bar on a four-on-the-floor track.)
     Time = where the envelope first reaches half its peak: peaks lag the attack by the attack time,
@@ -93,7 +93,7 @@ def _onsets(mono: np.ndarray, lo: float, hi: float) -> tuple[np.ndarray, np.ndar
         return np.array([]), np.array([])
     e = e / (np.percentile(e, 99) + 1e-12)
     e = np.convolve(e, np.hanning(5) / np.hanning(5).sum(), mode="same")
-    peaks, _ = find_peaks(e, prominence=ONSET_PROMINENCE, distance=max(int(MIN_ONSET_GAP_S * SR / HOP), 1))
+    peaks, _ = find_peaks(e, prominence=prominence, distance=max(int(MIN_ONSET_GAP_S * SR / HOP), 1))
     starts = []
     for k, p in enumerate(peaks):
         floor = peaks[k - 1] if k else 0  # never walk back into the previous hit
@@ -123,7 +123,7 @@ def groove(drums_mono: np.ndarray, bpm: float) -> dict:
     Step 0 is the beat the kick lands on: the clip starts at the drop's first low-end entry, which on
     real tracks is often an off-beat bass note, so the kick (not the clip start) defines the downbeat.
     That also fixes 16th parity, so swing cannot flip sign."""
-    per = {name: _onsets(drums_mono, lo, hi) for name, (lo, hi) in GROOVE_BANDS.items()}
+    per = {name: lane_onsets(drums_mono, lo, hi) for name, (lo, hi) in GROOVE_BANDS.items()}
     all_t = np.concatenate([t for t, _ in per.values()])
     all_w = np.concatenate([w for _, w in per.values()])
     if all_t.size < 8:
@@ -143,7 +143,8 @@ def groove(drums_mono: np.ndarray, bpm: float) -> dict:
     kick_idx = grid["kick"][0]
     shift = int(np.argmax([np.sum((kick_idx - r) % 4 == 0) for r in range(4)])) if kick_idx.size else 0
 
-    out, vec = {"step_s": round(step, 5), "bpm_fit": round(60 / step / 4, 2)}, []
+    out, vec = {"step_s": round(step, 5), "bpm_fit": round(60 / step / 4, 2),
+                "phase_s": round(float(phase), 5), "kick_shift": shift}, []   # phase/shift: where step 0 of each bar is
     lane_swings, odd_cross, even_all = [], [], []
     for name, (idx, d, w) in grid.items():
         hit, off, vel = np.zeros(16), np.zeros(16), np.zeros(16)
@@ -209,6 +210,7 @@ def detect_key(tonal_mono: np.ndarray) -> str:
 def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: float | None) -> dict:
     """mix/stems: (ch, samples) at SR. With `split_s` the clip is build then drop (the drop starts there)
     and arrangement metrics are included; with None the whole clip is measured (a captured project)."""
+    from . import pattern   # pattern builds on this module's onset and grid code, so it is imported here
     cut = int((split_s or 0) * SR)
     drop = lambda a: a[:, cut:]
     build = lambda a: a[:, :cut]
@@ -225,11 +227,14 @@ def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: 
                              for n, s in stems.items() if n != "vocals"},
         }
         arrangement["rise_db"] = round(arrangement["drop_rms_db"] - arrangement["build_rms_db"], 2)
+    drop_stems = {n: drop(x).mean(0) for n, x in stems.items() if n != "vocals"}
+    groove_doc = groove(drop_stems["drums"], bpm)
     return {
         "bpm": round(bpm, 2),
         **key_info(rank_keys(tonal)),
         "mix": _mix_metrics(drop(mix)),
         "stems": {n: _stem_metrics(drop(s)) for n, s in stems.items() if n != "vocals"},
-        "groove": groove(drop(stems["drums"]).mean(0), bpm),
+        "groove": groove_doc,
+        "loops": pattern.loops(drop_stems, groove_doc),
         "arrangement": arrangement,
     }

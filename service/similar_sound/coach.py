@@ -6,6 +6,7 @@ compare(yours)  : rank where your bounce differs from its nearest references, th
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 
 import numpy as np
@@ -27,6 +28,11 @@ SYSTEM = (
     "gaps, not everything. Hedge honestly: groove and sound choice are partly beyond these measurements. "
     "Stems: 'drums', 'bass' and 'other' (synths, leads, pads, vocals: everything that is neither drums nor bass). "
     "If 'key_could_also_be' is present the key is a close call between those keys: say so rather than naming one. "
+    "'loops' (when present) is what each layer plays in the drop, read bar by bar over 16 steps: the bass line is "
+    "reliable note by note; the synth layer is only the steps it hits and the pitch classes sounding there (a sketch of "
+    "its rhythm and harmony, NOT a transcription of its melody); say so if asked for exact synth notes. A layer marked "
+    "absent_in_the_drop is not playing in the drop: say that. If 'loops' is missing the song was analysed before loops "
+    "were measured: say that song has no loop data yet rather than guessing. "
     "Quote numbers exactly as given and never invent a measurement that is not in the data. Loudness differences "
     "between an unmastered project and a mastered reference reflect mastering, not mixing: say so."
 )
@@ -107,6 +113,29 @@ def gaps(yours: dict, refs: list[dict], top: int = 8, ref_name: str = "the refer
     return sorted(out, key=lambda g: -g.score)[:top]
 
 
+LOOPS_HOW_TO_READ = (
+    "Each pattern string is one bar of 16 steps, step 0 first (step 0 is the kick's beat; steps 0, 4, 8, 12 are the "
+    "quarter-note beats, odd steps the off-beat 16ths). Bass: a note name where a note starts, '~' where it carries "
+    "on, '.' where silent. Synth: the pitch classes sounding where a hit lands ('E+G+B'), '.' elsewhere. Drums: k = kick, "
+    "m = mid-range percussion, h = hats. 'repeats_every_bars' is the shortest loop length that matches; "
+    "'bars_matching' is how closely later bars repeat it (1 = identical).")
+
+
+def _loops(doc: dict) -> dict:
+    """The drop's loops for the model, or the reason there are none (songs analysed before loops existed)."""
+    lp = doc.get("loops")
+    if lp is None:
+        return {"not_measured_for_this_song": "analysed before loops were measured"}
+    if lp.get("empty"):
+        return {"not_measurable": "no steady beat grid was found in the drop"}
+    out = {"how_to_read": LOOPS_HOW_TO_READ, "bars_analysed": lp["bars_analysed"],
+           "whole_groove_repeats_every_bars": lp["whole_groove_repeats_every_bars"]}
+    for layer in ("bass", "other", "drums"):
+        out["synth_and_other" if layer == "other" else layer] = lp[layer]
+    out["what_lands_on_each_16th_step"] = lp["what_lands_on_each_16th_step"]
+    return out
+
+
 BAND_HZ = {"sub": "20-60 Hz", "bass": "60-120 Hz", "low_mid": "120-250 Hz", "mid": "250-500 Hz",
            "upper_mid": "500 Hz-2 kHz", "presence": "2-6 kHz", "air": "6-12 kHz", "top": "12-20 kHz"}
 WIDTH_RANGES = ("below 150 Hz", "150 Hz-2 kHz", "above 2 kHz")
@@ -138,6 +167,7 @@ def labelled(doc: dict) -> dict:
                      "stereo_width_0_mono_to_1_wide": dict(zip(WIDTH_RANGES, doc["mix"]["stereo_width"]))},
         "stems": {name: stem(m) for name, m in doc["stems"].items()},
         "groove": groove,
+        "loops": _loops(doc),
     }
     if a:
         out["build_to_drop"] = {"loudness_rise_dB": a.get("rise_db"), "each_stem_rise_dB": a.get("stem_rise_db")}
@@ -242,10 +272,8 @@ COLLECTION_SYSTEM_NOTE = (
     "and drop. They want to understand what the songs HAVE IN COMMON and what makes the style work. Lead with traits "
     "most songs share (the 'most_shared_traits' and 'drum_patterns' below), then name any clear outliers. Quote the "
     "numbers and say how many songs they hold for. Frame it as coming from the data ('Based off the data pulled from "
-    "the audio...'). The data does NOT include which notes, melodies or rhythms a synth, lead or pad plays, nor patch "
-    "or sound-design settings: for those, say what the data does show (that stem's level, brightness, spectrum, "
-    "stereo width, how it changes from build to drop) and that the data pulled from the audio can't tell us the exact "
-    "pattern. If they ask a follow-up, use the conversation so far."
+    "the audio...'). The data has each song's bass line (notes per 16th step), how many bars each layer takes to repeat, and which steps the synths hit with their pitch classes (a sketch, not a transcription): see 'loop_patterns'. It does NOT include patch or sound-design settings or exact synth melodies: for those, say what the data does show and that the data pulled from the audio can't tell us the rest. "
+    "If they ask a follow-up, use the conversation so far."
 )
 
 
@@ -276,6 +304,35 @@ def _step_patterns(docs: list[dict]) -> dict:
     return out
 
 
+def _loop_patterns(docs: list[dict]) -> dict:
+    """What the songs' bass lines and layers have in common, from the songs that have loop data."""
+    lps = [d["loops"] for d in docs if d.get("loops") and not d["loops"].get("empty")]
+    out: dict = {"songs_with_loop_data": len(lps), "of": len(docs)}
+    if not lps:
+        return out
+    present = lambda layer: [lp[layer] for lp in lps if not lp[layer].get("absent_in_the_drop")]
+    bass = present("bass")
+    out["bass"] = {"songs_with_bass_in_the_drop": len(bass)}
+    if bass:
+        out["bass"].update({
+            "most_used_notes_across_songs": dict(Counter(n for b in bass for n in list(b.get("notes_by_share", {}))[:2]).most_common(5)),
+            "loop_length_in_bars_counts": dict(Counter(b["repeats_every_bars"] for b in bass)),
+            "average_sounding_steps_per_bar": round(float(np.mean([b.get("sounding_steps_per_bar", 0) for b in bass])), 1)})
+    other = present("other")
+    if other:
+        out["synth_and_other"] = {"songs_with_it_in_the_drop": len(other),
+                                  "average_hits_per_bar": round(float(np.mean([o["hits_per_bar"] for o in other])), 1),
+                                  "loop_length_in_bars_counts": dict(Counter(o["repeats_every_bars"] for o in other))}
+    out["whole_groove_loop_length_in_bars_counts"] = dict(Counter(lp["whole_groove_repeats_every_bars"] for lp in lps))
+    placed = {}
+    for layer in ("kick", "mid-percussion", "hat", "bass", "synth"):
+        freq = np.mean([[layer in step.split(": ", 1)[1].split("+") for step in lp["what_lands_on_each_16th_step"]]
+                        for lp in lps], axis=0)
+        placed[layer] = [i for i, f in enumerate(freq) if f >= 0.7]
+    out["steps_each_layer_lands_on_in_70_percent_or_more_of_songs"] = placed
+    return out
+
+
 def collection_digest(name: str, docs: list[dict]) -> str:
     """Everything the model needs to answer questions about a whole collection, in a size that does not grow with it:
     per-song headlines (the first MAX_SONG_LINES), then statistics over ALL the songs: which measured traits they share,
@@ -293,8 +350,10 @@ def collection_digest(name: str, docs: list[dict]) -> str:
         "most_shared_traits": [strip(r) for r in rows[:SHARED_TRAITS]],
         "most_variable_traits": [strip(r) for r in rows[::-1][:VARIABLE_TRAITS]],
         "drum_patterns_16th_steps_0_to_15": _step_patterns(docs),
+        "loop_patterns": _loop_patterns(docs),
         "songs": [{"title": d.get("title"), "artist": d.get("artist"), "bpm": round(d["bpm"]), "key": d["key"],
-                   **({"swing": d["groove"]["swing"]} if not d["groove"].get("empty") else {}), "lufs": d["mix"]["lufs"]}
+                   **({"swing": d["groove"]["swing"]} if not d["groove"].get("empty") else {}), "lufs": d["mix"]["lufs"],
+                   **({"bass_bar_1": d["loops"]["bass"]["loop"][0]} if (d.get("loops") or {}).get("bass", {}).get("loop") else {})}
                   for d in docs[:MAX_SONG_LINES]],
     }
     if len(docs) > MAX_SONG_LINES:
