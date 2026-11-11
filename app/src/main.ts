@@ -33,7 +33,6 @@ $("#app").innerHTML = `
     <button class="iconbtn corner keybtn" id="keybtn" title="API key">${KEY_ICON}</button>
     <span class="grabber" data-tauri-drag-region></span>
     <span class="spacer" data-tauri-drag-region></span>
-    <button class="iconbtn gone" id="pause" title="Pause / resume the queue">❚❚</button>
     <button class="iconbtn corner" id="close" title="Hide (the ♪ in the menu bar brings it back)">✕</button>
   </div>
   <div class="nav" id="nav" style="--i:0"><span class="slider"></span>${TABS.map(([k, label]) => `<button data-tab="${k}">${label}</button>`).join("")}</div>
@@ -110,12 +109,8 @@ mountCompare($("#cmp"));
 mountKeyPanel(() => render());
 $("#keybtn").onclick = () => toggleKeyPanel();
 $("#close").onclick = () => win?.close(); // the Rust side hides instead of quitting
-$("#pause").onclick = () => run(async () => { await (S.status?.state === "paused_user" ? api.resume() : api.pause()); await refresh(true); });
 
 function render() {
-  const queued = (S.status?.jobs ?? []).filter((j) => j.status !== "done").length;
-  $("#pause").classList.toggle("gone", !(queued > 0 || S.status?.state === "paused_user"));
-  $("#pause").textContent = S.status?.state === "paused_user" ? "▶" : "❚❚";
   $("#offline").hidden = !S.offline;
   const was = document.body.classList.contains("booting");
   document.body.classList.toggle("booting", S.booting);

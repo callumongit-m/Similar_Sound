@@ -48,6 +48,8 @@ function fakeService() {
     const ok = (b: unknown) => ({ ok: true, status: 200, json: async () => b });
     const fail = (status: number, detail: unknown) => ({ ok: false, status, json: async () => ({ detail }) });
     if (path === "/status") return ok({ state: W.state ?? "idle", jobs: W.jobs });
+    if (path === "/pause") { W.state = "paused_user"; return ok({ state: W.state }); }
+    if (path === "/resume") { W.state = "working"; W.jobs.forEach((j) => { if (j.status === "pending") j.status = "running"; }); return ok({ state: W.state }); }
     if (path === "/tracks") return ok(W.tracks);
     if (path === "/collections" && method === "GET") return ok(W.collections);
     if (path === "/collections" && method === "POST") { const c = { id: 9, name: body.name, track_ids: [] }; W.collections.push(c); return ok(c); }
@@ -739,49 +741,104 @@ test("pasting the same song twice does not make two cards", async () => {
   expect($$("#latest .card")).toHaveLength(1);
 });
 
-test("while Ableton is open a waiting song says why, and the note explains the pause", async () => {
+const ABLETON_PAUSED = "Track analysis is paused whilst Ableton is open, you can resume the analysis using the toggle";
+
+test("while Ableton is open, queued songs say Paused and the line under the input says why, with the toggle", async () => {
   W.state = "paused_ableton";
   await boot();
   await paste("https://soundcloud.com/x/one");
   await paste("https://soundcloud.com/x/two");
-  expect($$("#latest .card .status").map((s) => s.textContent)).toEqual(["Waiting for Ableton to close", "Waiting for Ableton to close"]);
-  expect($("#queue-note").hidden).toBe(false);
-  expect($("#queue-note").textContent).toContain("Analysis waits while Ableton is open");
+  expect($$("#latest .card .status").map((s) => s.textContent)).toEqual(["Paused", "Paused"]);
+  expect($("#qcontrol").hidden).toBe(false);
+  expect($("#qcontrol [data-qtext]").textContent).toBe(ABLETON_PAUSED);
+  expect([...$("#qcontrol [data-qtoggle]").querySelectorAll("button")].map((b) => b.textContent)).toEqual(["▶ Play", "❚❚ Pause"]);
+  expect($("#qcontrol [data-act='pause']").classList.contains("active")).toBe(true);          // it is paused, so Pause is the lit side
+  expect(($("#qcontrol [data-qtoggle]") as HTMLElement).style.getPropertyValue("--i")).toBe("1");
 });
 
-test("when Ableton closes the waiting text and the note go away", async () => {
+test("the Play / Pause toggle sits under the paste bar, and the old pause button in the corner is gone", async () => {
   W.state = "paused_ableton";
   await boot();
   await paste("https://soundcloud.com/x/one");
-  expect($("#queue-note").hidden).toBe(false);
-  W.state = "working"; W.jobs[0].status = "running";
+  const pane = $("#pane-add");
+  const order = [...pane.children].map((c) => c.id);
+  expect(order.indexOf("add")).toBeLessThan(order.indexOf("qcontrol"));
+  expect(order.indexOf("qcontrol")).toBeLessThan(order.indexOf("latest"));
+  expect(document.querySelector("#pause")).toBeNull();
+  expect($$(".titlebar button").map((b) => b.id)).toEqual(["keybtn", "close"]);
+});
+
+test("pressing Play runs the queue even though Ableton is open", async () => {
+  W.state = "paused_ableton";
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  click($("#qcontrol [data-act='resume']"));
   await tick(1500);
-  expect($("#queue-note").hidden).toBe(true);
-  expect($("#latest .card .status").textContent).toContain("Splitting stems");
+  expect(W.calls.some((c) => c.path === "/resume" && c.method === "POST")).toBe(true);
+  expect($("#latest .card .status").textContent).toBe("Splitting stems…");
+  expect($("#qcontrol [data-qtext]").textContent).toBe("Track analysis is running, you can pause it using the toggle");
+  expect($("#qcontrol [data-act='resume']").classList.contains("active")).toBe(true);
 });
 
-test("a song already analysing when Ableton opens says it is paused, not still working", async () => {
-  W.state = "paused_ableton";
-  W.jobs = [{ id: 5, source: "https://soundcloud.com/x/one", status: "running", stage: "stems", error: null, title: "One", artist: "A", track_key: "k:one" }];
+test("pressing Pause holds everything, and the songs say Paused", async () => {
   await boot();
   await paste("https://soundcloud.com/x/one");
-  expect($("#latest .card .status").textContent).toBe("Paused at splitting stems: Ableton is open");
+  expect($("#qcontrol [data-qtext]").textContent).toContain("running");
+  click($("#qcontrol [data-act='pause']"));
+  await tick(1500);
+  expect(W.calls.some((c) => c.path === "/pause")).toBe(true);
+  expect($("#latest .card .status").textContent).toBe("Paused");
+  expect($("#qcontrol [data-qtext]").textContent).toBe("Track analysis is paused, you can resume the analysis using the toggle");
 });
 
-test("a deliberate pause reads as paused, and the Ableton note stays away", async () => {
+test("clicking the side that is already lit does nothing", async () => {
+  W.state = "paused_ableton";
+  await boot();
+  await paste("https://soundcloud.com/x/one");
+  click($("#qcontrol [data-act='pause']"));                                                   // already paused
+  await tick(80);
+  expect(W.calls.filter((c) => c.path === "/pause" || c.path === "/resume")).toHaveLength(0);
+});
+
+test("the toggle only shows when there is work or a pause to resume from", async () => {
+  await boot();
+  expect($("#qcontrol").hidden).toBe(true);                                                    // nothing queued, nothing paused
+  W.state = "paused_user";
+  await tick(1500);
+  expect($("#qcontrol").hidden).toBe(false);                                                   // paused: there must be a way to resume
+});
+
+test("songs still waiting from an earlier session are shown, so queued work never vanishes after a restart", async () => {
+  W.state = "paused_ableton";
+  W.jobs = [
+    { id: 5, source: "https://soundcloud.com/x/like-that", status: "pending", stage: "", error: null, title: "Like That (Feat. DJ Dre)", artist: "L.P. Rhythm", track_key: "k:like-that" },
+    { id: 4, source: "https://soundcloud.com/x/only-you", status: "pending", stage: "", error: null, title: "ONLY YOU (UNRELEASED)", artist: "MAX DEAN", track_key: "k:only-you" },
+    { id: 3, source: "https://soundcloud.com/x/free", status: "done", stage: "", error: null, title: "Free", artist: "Joss Dean", track_key: "t2" }];
+  await boot();                                                                               // nothing was added in THIS session
+  expect($$("#latest .card").map((c) => c.querySelector(".title")!.textContent)).toEqual(["ONLY YOU (UNRELEASED)", "Like That (Feat. DJ Dre)"]);   // oldest first; the finished one lives in Collections
+  expect($$("#latest .card .status").map((c) => c.textContent)).toEqual(["Paused", "Paused"]);
+});
+
+test("a finished song from an earlier session is not in Add song (it is in Collections)", async () => {
+  W.jobs = [{ id: 3, source: "https://soundcloud.com/x/free", status: "done", stage: "", error: null, title: "Free", artist: "Joss Dean", track_key: "t2" }];
+  await boot();
+  expect($$("#latest .card")).toHaveLength(0);
+});
+
+test("a deliberate pause reads Paused too", async () => {
   W.state = "paused_user";
   await boot();
   await paste("https://soundcloud.com/x/one");
   expect($("#latest .card .status").textContent).toBe("Paused");
-  expect($("#queue-note").hidden).toBe(true);                                          // that note is only about Ableton
+  expect($("#qcontrol [data-qtext]").textContent).toBe("Track analysis is paused, you can resume the analysis using the toggle");
 });
 
-test("a song mid-analysis when you pause says where it paused", async () => {
+test("a song mid-analysis when you pause also reads Paused", async () => {
   W.state = "paused_user";
   W.jobs = [{ id: 5, source: "https://soundcloud.com/x/one", status: "running", stage: "embed", error: null, title: "One", artist: "A", track_key: "k:one" }];
   await boot();
   await paste("https://soundcloud.com/x/one");
-  expect($("#latest .card .status").textContent).toBe("Paused at embedding");
+  expect($("#latest .card .status").textContent).toBe("Paused");
 });
 
 test("a song queued behind a running one says it is up next", async () => {
@@ -789,6 +846,6 @@ test("a song queued behind a running one says it is up next", async () => {
   W.jobs = [{ id: 4, source: "https://soundcloud.com/x/other", status: "running", stage: "stems", error: null, title: "Other", artist: "A", track_key: "k:other" }];
   await boot();
   await paste("https://soundcloud.com/x/two");
-  expect($("#latest .card .status").textContent).toBe("Up next");
-  expect($("#queue-note").hidden).toBe(true);
+  const statuses = $$("#latest .card .status").map((s) => s.textContent);
+  expect(statuses).toEqual(["Splitting stems…", "Up next"]);
 });

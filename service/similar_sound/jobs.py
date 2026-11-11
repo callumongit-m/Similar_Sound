@@ -1,5 +1,7 @@
 """Persistent single-worker queue.
 
+The queue holds by itself while Ableton is open (analysis is heavy and could glitch audio). The user can
+press Play to run it anyway; that override lasts only until Ableton closes, so next time it holds again.
 Interface: enqueue(source) is always accepted. A job whose main drop cannot be found parks as
 `needs_timestamp` (with the message to show) until provide_timestamp(job_id, "3:04") resumes it. The worker runs one job at a time and holds
 (between stages) while the user paused it or Ableton is open. Jobs live in SQLite, so a crash
@@ -27,6 +29,7 @@ class JobQueue:
         self._store, self._ingest, self._ableton, self._poll = store, ingest, ableton_running, poll_s
         self._peek = peek
         self._user_paused = False
+        self._override = False       # "run even though Ableton is open"; cleared when Ableton closes
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._working = False
@@ -75,14 +78,23 @@ class JobQueue:
 
     def pause(self) -> None:
         self._user_paused = True
+        self._override = False
 
     def resume(self) -> None:
+        """Play. If Ableton is open this runs the queue anyway, until Ableton closes."""
         self._user_paused = False
+        self._override = self._ableton()
+
+    def _held_by_ableton(self) -> bool:
+        running = self._ableton()
+        if not running:
+            self._override = False           # the override was for this Ableton session only
+        return running and not self._override
 
     def state(self) -> str:
         if self._user_paused:
             return "paused_user"
-        if self._ableton():
+        if self._held_by_ableton():
             return "paused_ableton"
         return "working" if self._working else "idle"
 
@@ -104,7 +116,7 @@ class JobQueue:
 
     # --- worker ---
     def _may_run(self) -> bool:
-        return not self._user_paused and not self._ableton()
+        return not self._user_paused and not self._held_by_ableton()
 
     def _hold(self) -> None:
         while not self._may_run() and not self._stop.is_set():

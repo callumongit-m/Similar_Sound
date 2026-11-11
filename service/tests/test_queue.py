@@ -189,3 +189,65 @@ def test_same_soundcloud_song_shared_differently_is_one_track():
     assert track_id("https://soundcloud.com/obpofficial/temptation-6") != track_id(b)
     # other sites keep their query: youtube's ?v= IS the identity
     assert track_id("https://youtube.com/watch?v=aaa") != track_id("https://youtube.com/watch?v=bbb")
+
+
+# ---------- Play overrides Ableton's automatic hold, for that Ableton session only ----------
+def test_play_runs_the_queue_even_though_ableton_is_open(tmp_path):
+    ab = {"on": True}
+    s, q = make(tmp_path, ab)
+    q.start(); q.enqueue("a")
+    time.sleep(0.3)
+    assert q.state() == "paused_ableton" and not done(q, 1)
+    q.resume()                                   # the user presses Play
+    assert wait(lambda: done(q, 1)) and ab["on"]    # it ran with Ableton still open
+    q.stop()
+
+
+def test_the_override_ends_when_ableton_closes(tmp_path):
+    ab = {"on": True}
+    s, q = make(tmp_path, ab)
+    q.resume()
+    assert q.state() == "idle"                   # overriding: not held
+    ab["on"] = False
+    assert q.state() == "idle"                   # Ableton closed: the override has served its purpose
+    ab["on"] = True
+    assert q.state() == "paused_ableton"         # next time Ableton opens it holds again
+
+
+def test_pause_wins_and_cancels_the_override(tmp_path):
+    ab = {"on": True}
+    s, q = make(tmp_path, ab)
+    q.resume(); q.pause()
+    assert q.state() == "paused_user"
+    q.resume()                                   # Play again with Ableton still open
+    assert q.state() != "paused_user" and q.state() != "paused_ableton"
+
+
+def test_resume_with_ableton_closed_is_just_resume(tmp_path):
+    ab = {"on": False}
+    s, q = make(tmp_path, ab)
+    q.pause(); assert q.state() == "paused_user"
+    q.resume(); assert q.state() == "idle"
+    ab["on"] = True
+    assert q.state() == "paused_ableton"         # no lingering override from a Play pressed when Ableton was closed
+
+
+def test_a_job_held_mid_way_continues_when_you_press_play(tmp_path):
+    ab = {"on": False}
+    gate = {"held": False}
+    stages = []
+    def ingest(source, checkpoint=lambda: None, progress=lambda s: None):
+        progress("stems"); stages.append("stems")
+        ab["on"] = True                          # Ableton opens in the middle of the job
+        checkpoint()                             # ...so the job holds here
+        stages.append("after-checkpoint")
+        return fake_ingest(source, checkpoint, progress)
+    s = Store(tmp_path / "t.db")
+    q = JobQueue(s, ingest, lambda: ab["on"], poll_s=0.02, peek=lambda s: None)
+    q.start(); q.enqueue("a")
+    assert wait(lambda: stages == ["stems"])
+    time.sleep(0.2)
+    assert stages == ["stems"] and q.state() == "paused_ableton"
+    q.resume()
+    assert wait(lambda: done(q, 1)) and stages == ["stems", "after-checkpoint"]
+    q.stop()

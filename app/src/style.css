@@ -45,7 +45,6 @@ input, textarea { font: inherit; color: var(--text); user-select: text; -webkit-
 /* Concentric corners: a shape nested inside another has radius = outer radius - the gap between their edges.
    Window radius 24, button 8 in from the edge => 16, so the button's curve runs parallel to the window's. */
 .iconbtn.corner { width: 34px; height: 34px; margin-top: var(--edge-gap); border-radius: calc(var(--win-radius) - var(--edge-gap)); }
-.iconbtn#pause { margin-right: 2px; }
 .add { padding: 0 0 4px; flex: none; }
 .add input {
   width: 100%; padding: 12px 16px; font-size: 14px; outline: none; border-radius: 16px;
@@ -301,7 +300,14 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
 .gorb { width: 92px; height: 92px; margin: 18px auto 0; border-radius: 50%; }
 .add input:disabled { opacity: .6; cursor: progress; }
 
-/* ---------- the queue says why it is waiting ---------- */
-.queue-note { margin: 4px 2px 10px; font-size: 11.5px; line-height: 1.4; color: var(--muted); animation: rise .3s var(--ease) both; }
-.queue-note[hidden] { display: none; }
 .status.held { color: var(--text); opacity: .75; }
+
+/* ---------- the queue's Play / Pause toggle, under the input ---------- */
+.qcontrol { margin: 2px 2px 12px; animation: rise .3s var(--ease) both; }
+.qcontrol[hidden] { display: none; }
+.qtext { font-size: 12px; line-height: 1.45; color: var(--muted); margin-bottom: 8px; }
+.qtoggle { position: relative; display: inline-flex; padding: 3px; border-radius: 999px; background: var(--glass); border: 1px solid var(--stroke-soft); }
+.qtoggle button { position: relative; z-index: 1; width: 78px; background: none; border: 0; padding: 5px 0; border-radius: 999px; font-size: 12px; color: var(--muted); transition: color .2s; }
+.qtoggle button.active { color: var(--text); }
+.qtoggle .slider { position: absolute; z-index: 0; top: 3px; bottom: 3px; left: 3px; width: 78px; border-radius: 999px; background: var(--glass-hi);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.22), 0 1px 3px rgba(0,0,0,.18); transform: translateX(calc(var(--i, 0) * 100%)); transition: transform .35s var(--spring); }

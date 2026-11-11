@@ -10,17 +10,23 @@ export interface AddHost { onOpen(id: string): void; refresh(): Promise<void> }
 
 export const addSongHtml = `
   <div class="add" id="add"><input id="url" placeholder="Paste a SoundCloud link" spellcheck="false" autocomplete="off" /></div>
-  <div class="queue-note" id="queue-note" hidden>Analysis waits while Ableton is open, so it can't glitch your audio. It carries on when you close Ableton.</div>
+  <div class="qcontrol" id="qcontrol" hidden>
+    <div class="qtext" data-qtext></div>
+    <div class="qtoggle" data-qtoggle style="--i:0" role="group" aria-label="Track analysis">
+      <span class="slider"></span>
+      <button data-act="resume">▶ Play</button><button data-act="pause">❚❚ Pause</button>
+    </div>
+  </div>
   <div id="latest"></div>`;
 
-/** Why a job is not moving, in words. The queue holds while Ableton is open (heavy analysis could glitch audio). */
+const isPaused = () => S.status?.state === "paused_ableton" || S.status?.state === "paused_user";
+
+/** What a song that is not finished says. Anything held by a pause (yours, or the automatic one while Ableton is
+ *  open) just says "Paused"; the line under the input says why. */
 function waitingText(j: Job): string {
-  const state = S.status?.state;
-  const step = (STAGES[j.stage] ?? "this step").toLowerCase();
-  if (j.status === "running") return state === "paused_ableton" ? `Paused at ${step}: Ableton is open` : state === "paused_user" ? `Paused at ${step}` : `${STAGES[j.stage] ?? "Working"}…`;
-  if (state === "paused_ableton") return "Waiting for Ableton to close";
-  if (state === "paused_user") return "Paused";
-  return state === "working" ? "Up next" : "Starting…";
+  if (isPaused()) return "Paused";
+  if (j.status === "running") return `${STAGES[j.stage] ?? "Working"}…`;
+  return S.status?.state === "working" ? "Up next" : "Starting…";
 }
 
 function jobCard(j: Job) {
@@ -28,8 +34,8 @@ function jobCard(j: Job) {
   const title = j.title || track?.title || niceName(j.source);
   const artist = j.artist ?? track?.artist ?? "";
   let meta = "", body = "";
-  if (j.status === "running") meta = `<span class="status ${S.status?.state?.startsWith("paused") ? "held" : "running"}">${esc(waitingText(j))}</span>`;
-  else if (j.status === "pending") meta = `<span class="status ${S.status?.state === "paused_ableton" ? "held" : ""}">${esc(waitingText(j))}</span>`;
+  if (j.status === "running") meta = `<span class="status ${isPaused() ? "held" : "running"}">${esc(waitingText(j))}</span>`;
+  else if (j.status === "pending") meta = `<span class="status ${isPaused() ? "held" : ""}">${esc(waitingText(j))}</span>`;
   else if (j.status === "error") { meta = `<span class="status error">Failed</span><button class="x" data-dismiss="${j.id}" title="Dismiss">✕</button>`; body = `<div class="sub wrap err">${esc(j.error)}</div>`; }
   else if (j.status === "needs_timestamp") {
     meta = `<button class="x" data-dismiss="${j.id}" title="Dismiss">✕</button>`;
@@ -60,9 +66,11 @@ export function mountAddSong(root: HTMLElement, host: AddHost) {
   });
 
   root.addEventListener("click", (e) => {
-    const t = (e.target as HTMLElement).closest<HTMLElement>("[data-dismiss],[data-send-ts],.card.click");
+    const t = (e.target as HTMLElement).closest<HTMLElement>("[data-dismiss],[data-send-ts],[data-act],.card.click");
     if (!t) return;
-    if (t.dataset.dismiss) run(async () => { await api.dismiss(Number(t.dataset.dismiss)); await host.refresh(); });
+    if (t.dataset.act) {                       // Play / Pause: Play also runs the queue while Ableton is open
+      if ((t.dataset.act === "resume") === isPaused()) run(async () => { await (isPaused() ? api.resume() : api.pause()); await host.refresh(); });
+    } else if (t.dataset.dismiss) run(async () => { await api.dismiss(Number(t.dataset.dismiss)); await host.refresh(); });
     else if (t.dataset.sendTs) {
       const id = Number(t.dataset.sendTs);
       const ts = root.querySelector<HTMLInputElement>(`[data-ts="${id}"]`)?.value ?? "";
@@ -75,11 +83,13 @@ export function mountAddSong(root: HTMLElement, host: AddHost) {
   });
 }
 
-/** Every song added since the window opened, in the order they were added (that is also the order they are analysed):
- *  waiting, in progress, stuck or finished. One card per song, which turns from "analysing" to "analysed" in place. */
+/** The songs on this screen: everything added since the window opened (in the order added, which is also the order
+ *  they are analysed) plus anything still waiting in the queue from an earlier session (so queued work never
+ *  vanishes after a restart). One card per song, which turns from waiting to analysing to analysed in place. */
 export function updateAddSong(root: HTMLElement) {
+  const wanted = (j: Job) => S.sessionJobs.has(j.id) || ["pending", "running", "needs_timestamp"].includes(j.status);
   const latestPerSong = new Map<string, Job>();
-  for (const j of (S.status?.jobs ?? []).filter((j) => S.sessionJobs.has(j.id)).sort((a, b) => a.id - b.id)) latestPerSong.set(j.track_key, j);
+  for (const j of (S.status?.jobs ?? []).filter(wanted).sort((a, b) => a.id - b.id)) latestPerSong.set(j.track_key, j);
   const jobs = [...latestPerSong.values()].sort((a, b) => a.id - b.id);
   const cards = jobs.map((j) => {
     const track = trackById(j.track_key);
@@ -88,8 +98,22 @@ export function updateAddSong(root: HTMLElement) {
     return jobCard(j);
   });
   syncCards($("#latest", root), cards);
-  const held = S.status?.state === "paused_ableton" && jobs.some((j) => j.status === "pending" || j.status === "running");
-  $("#queue-note", root).hidden = !held;
+  updateQueueControl(root, jobs.some((j) => j.status === "pending" || j.status === "running"));
+}
+
+/** The line under the input: whether analysis is running, and the Play/Pause toggle. Shown whenever there is
+ *  work in the queue or it is paused, so there is always a way to resume. */
+function updateQueueControl(root: HTMLElement, hasWork: boolean) {
+  const state = S.status?.state;
+  const box = $("#qcontrol", root);
+  box.hidden = !(hasWork || isPaused());
+  $("[data-qtext]", box).textContent =
+    state === "paused_ableton" ? "Track analysis is paused whilst Ableton is open, you can resume the analysis using the toggle"
+    : state === "paused_user" ? "Track analysis is paused, you can resume the analysis using the toggle"
+    : "Track analysis is running, you can pause it using the toggle";
+  const toggle = $("[data-qtoggle]", box);
+  toggle.style.setProperty("--i", isPaused() ? "1" : "0");
+  toggle.querySelectorAll<HTMLElement>("[data-act]").forEach((b) => b.classList.toggle("active", (b.dataset.act === "pause") === isPaused()));
 }
 
 export { errorText, trackChips };
