@@ -52,8 +52,12 @@ class Store:
         return json.loads(rows[0]["doc"]) if rows else None
 
     def list(self) -> list[dict]:
-        return [{"id": r["id"], "title": r["title"], "artist": r["artist"], "source": r["source"]}
-                for r in self.execute("SELECT id,title,artist,source FROM tracks ORDER BY created DESC")]
+        out = []
+        for r in self.execute("SELECT id,source,title,artist,doc FROM tracks ORDER BY created DESC"):
+            d = json.loads(r["doc"])
+            out.append({"id": r["id"], "title": r["title"], "artist": r["artist"], "source": r["source"],
+                        "bpm": d.get("bpm"), "key": d.get("key")})
+        return out
 
     def vector(self, track_id: str, kind: str) -> np.ndarray | None:
         rows = self.execute("SELECT data FROM vectors WHERE track_id=? AND kind=?", (track_id, kind))
