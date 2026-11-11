@@ -3,6 +3,7 @@
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
+import { invoke } from "@tauri-apps/api/core";
 vi.mock("@tauri-apps/api/dpi", () => ({ LogicalSize: class { constructor(public width: number, public height: number) {} } }));
 const setSize = vi.fn();
 const setPosition = vi.fn();
@@ -38,7 +39,7 @@ const GAPS = { feel: FEEL, why: WHY, reference: "UK minimal", n: 1, is_collectio
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { removeError?: any; state?: string; nextId?: number; down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { similar?: any[]; removeError?: any; state?: string; nextId?: number; down?: boolean; answerText?: string; llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
 // The real service gives a job the same track_key from the moment it is created, so one card can follow it.
 const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
@@ -72,7 +73,7 @@ function fakeService() {
       return ok({ id: "t1" });
     }
     if (path === "/tracks/t1") return ok(DOC);
-    if (path.startsWith("/tracks/t1/similar")) return ok([]);
+    if (path.startsWith("/tracks/t1/similar")) return ok(W.similar ?? []);
     if (path === "/tracks/t1/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: W.answerText ?? "It is rolling." }); }
     if (path === "/settings" && method === "GET") return ok(W.llm);
     if (path === "/settings/llm" && method === "POST") {
@@ -979,4 +980,76 @@ test("an open song says which collection it is in, or that it is unsorted", asyn
 test("a song in no collection says Unsorted", async () => {
   await openT1();
   expect($("#detail .where").textContent).toBe("Unsorted");
+});
+
+
+// ---------------- Play, and the closest-groove dropdown ----------------
+test("an open song has a Play link that asks the app to open the song's web address", async () => {
+  await openT1();
+  const play = $("#detail [data-play]");
+  expect(play.textContent).toBe("Play →");
+  expect(play.closest(".rise")!.querySelector(".h1")!.textContent).toBe("Temptation");           // it sits with the song's name
+  (invoke as any).mockClear();
+  click(play);
+  expect(invoke).toHaveBeenCalledWith("open_url", { url: "https://soundcloud.com/obpofficial/temptation-5" });
+});
+
+test("a song without a web address (e.g. a local file) has no Play link", async () => {
+  const noLink = { ...T1, source: "/Users/me/Music/bounce.wav" };
+  W.tracks = [noLink, T2];
+  const orig = DOC.source;
+  (DOC as any).source = noLink.source;
+  await openT1();
+  expect(document.querySelector("#detail [data-play]")).toBeNull();
+  (DOC as any).source = orig;
+});
+
+test("if the app can't open the link the reason is shown", async () => {
+  await openT1();
+  (invoke as any).mockImplementationOnce(() => Promise.reject(new Error("That doesn't look like a web link.")));
+  click($("#detail [data-play]"));
+  await tick(60);
+  expect($("#toast").textContent).toContain("doesn't look like a web link");
+});
+
+const SIMILAR = [{ id: "t2", score: 0.91, title: "Free" }, { id: "t3", score: 0.84, title: "Yes Baby" }];
+
+test("Closest groove starts closed and opens when asked", async () => {
+  W.similar = SIMILAR;
+  await openT1();
+  const box = $("#detail .disclosure");
+  const head = box.querySelector<HTMLElement>("[data-disc]")!;
+  expect(head.textContent).toContain("Closest groove");
+  expect(head.querySelector(".count")!.textContent).toBe("2");                                   // you can see there is something without it being shown
+  expect(box.classList.contains("open")).toBe(false);
+  expect(head.getAttribute("aria-expanded")).toBe("false");
+  click(head);
+  expect(box.classList.contains("open")).toBe(true);
+  expect(head.getAttribute("aria-expanded")).toBe("true");
+  expect([...box.querySelectorAll(".card .title")].map((t) => t.textContent)).toEqual(["Free", "Yes Baby"]);
+  click(head);
+  expect(box.classList.contains("open")).toBe(false);                                            // and closes again
+});
+
+test("the closed list collapses by CSS (height eases to zero), it is not simply left showing", () => {
+  const css = readFileSync("src/style.css", "utf8");
+  expect(css).toMatch(/\.disc-body\s*\{[^}]*grid-template-rows:\s*0fr/);
+  expect(css).toMatch(/\.disclosure\.open \.disc-body\s*\{[^}]*grid-template-rows:\s*1fr/);
+  expect(css).toMatch(/\.disc-inner\s*\{[^}]*overflow:\s*hidden/);
+});
+
+test("with no similar songs there is no dropdown at all", async () => {
+  W.similar = [];
+  await openT1();
+  expect(document.querySelector("#detail .disclosure")).toBeNull();
+});
+
+test("an opened closest-groove song can still be opened from the list", async () => {
+  W.similar = [{ id: "t1", score: 0.9, title: "Temptation" }];
+  await openT1();
+  click($("#detail [data-disc]"));
+  const before = W.calls.length;
+  click($("#detail .disclosure .card.click"));
+  await tick(80);
+  expect(W.calls.slice(before).some((c) => c.path === "/tracks/t1")).toBe(true);
 });

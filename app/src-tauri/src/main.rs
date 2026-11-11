@@ -141,6 +141,36 @@ fn describe_window(window: &tauri::WebviewWindow) -> String {
     }
 }
 
+/// True only for plain web links. The page asks the app to open a link (the webview itself cannot leave the app),
+/// so this is the one gate: no `file:`, no `javascript:`, no `-flags`, no whitespace or control characters.
+fn is_web_link(url: &str) -> bool {
+    (url.starts_with("https://") || url.starts_with("http://")) && !url.chars().any(|c| c.is_whitespace() || c.is_control())
+}
+
+/// Open a track's link in the default browser (or the SoundCloud app), so the user can hear the song again.
+#[tauri::command]
+fn open_url(url: String) -> Result<(), String> {
+    if !is_web_link(&url) {
+        return Err("That doesn't look like a web link.".into());
+    }
+    Command::new("/usr/bin/open").arg(&url).spawn().map(|_| ()).map_err(|e| format!("Couldn't open the link: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_web_link;
+
+    #[test]
+    fn only_plain_web_links_open() {
+        assert!(is_web_link("https://soundcloud.com/obpofficial/temptation-5?si=abc&utm_source=clipboard"));
+        assert!(is_web_link("http://example.com/x"));
+        for bad in ["file:///etc/passwd", "javascript:alert(1)", "-a Calculator", "ftp://x", "", "soundcloud.com/x",
+                    "https://a.com/ b", "https://a.com/\nb", "/Applications/Calculator.app", "https:/missing-slash"] {
+            assert!(!is_web_link(bad), "{bad:?} must not open");
+        }
+    }
+}
+
 fn show_window(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
@@ -166,7 +196,7 @@ fn toggle_window(app: &AppHandle) {
 fn main() {
     let app = tauri::Builder::default()
         .manage(Service(Mutex::new(None)))
-        .invoke_handler(tauri::generate_handler![log])
+        .invoke_handler(tauri::generate_handler![log, open_url])
         .setup(|app| {
             #[cfg(target_os = "macos")]
             app.set_activation_policy(tauri::ActivationPolicy::Accessory); // no Dock icon
