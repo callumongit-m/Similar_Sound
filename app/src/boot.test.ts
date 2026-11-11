@@ -26,7 +26,7 @@ class FakeResizeObserver {
 
 const T1 = { id: "t1", title: "Temptation", artist: "obp", source: "https://soundcloud.com/obpofficial/temptation-5", bpm: 128, key: "C min" };
 const T2 = { id: "t2", title: "Free", artist: "Joss Dean", source: "https://soundcloud.com/x/free", bpm: 126, key: "A min" };
-const DOC = { ...T1, segments: { build: [120, 150], drop: [150, 180] }, alternative_drops: [], groove: { swing: 0.12 } };
+const DOC = { ...T1, segments: { build: [120, 150], drop: [150, 180] }, alternative_drops: [100.5, 212.5], groove: { swing: 0.12 } };
 const FEEL = { weakest: "other", pairs: 1, reliable: false, note: "Add more songs for a sharper read: with only 1 pair of reference songs to measure against, this is a rough guide.",
   aspects: [
     { kind: "mix", label: "Overall vibe", score: 80, typical: 82, gap: 2, pairs: 1, scope: "these songs", closest: { title: "Temptation", score: 84 }, furthest: { title: "Free", score: 76 } },
@@ -1052,4 +1052,15 @@ test("an opened closest-groove song can still be opened from the list", async ()
   click($("#detail .disclosure .card.click"));
   await tick(80);
   expect(W.calls.slice(before).some((c) => c.path === "/tracks/t1")).toBe(true);
+});
+
+
+// ---------------- no "Not the right drop?" ----------------
+test("an open song never offers other drops, even when the analysis found some", async () => {
+  await openT1();                                                                              // DOC carries alternative_drops: [100.5, 212.5]
+  const text = $("#detail").textContent!;
+  expect(text).not.toContain("Not the right drop");
+  expect(document.querySelector("#detail [data-redrop]")).toBeNull();
+  expect($$("#detail .drops")).toHaveLength(0);
+  expect(text).not.toMatch(/\b1:40\b|\b3:32\b/);                                              // the alternative times 100.5 s and 212.5 s are not shown anywhere
 });

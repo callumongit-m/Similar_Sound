@@ -109,7 +109,6 @@ const detailHost = {
     toast("Removed. Paste its link again to analyse it from scratch.");
     await refresh(true);
   }),
-  onRedrop: (url: string) => run(async () => { const { id } = await api.addJob(url); S.sessionJobs.add(id); closeDetail(false); showTab("add"); await refresh(); }),
 };
 function openSong(id: string) {
   pane(tab).hidden = true;

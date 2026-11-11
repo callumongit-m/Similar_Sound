@@ -8,7 +8,6 @@ export interface Status { state: QueueState; jobs: Job[] }
 export interface TrackSummary { id: string; title: string; artist: string; source: string; bpm: number | null; key: string | null; key_alternatives?: string[] }
 export interface TrackDoc extends TrackSummary {
   segments: { build: [number, number]; drop: [number, number] };
-  alternative_drops: number[];
   groove: { swing?: number };
 }
 export interface LlmSummary { configured: boolean; provider: string | null; name: string | null; model: string | null }
