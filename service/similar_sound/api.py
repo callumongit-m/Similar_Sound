@@ -9,7 +9,10 @@ from pydantic import BaseModel
 
 from pathlib import Path
 
+from dataclasses import asdict
+
 from . import ableton, coach, config, keychain, library, listen, llm, pipeline
+from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
 
@@ -30,8 +33,11 @@ class Bounce(BaseModel):
     path: str  # your own Ableton export (wav/mp3); analysed but never saved to the library
 
 
-class GeminiKey(BaseModel):
+class ApiKey(BaseModel):
     key: str
+    provider: str | None = None      # only needed when the key's prefix doesn't say which company it is
+    base_url: str | None = None      # only for "Other (OpenAI-compatible)"
+    model: str | None = None
 
 
 class Name(BaseModel):
@@ -48,21 +54,20 @@ class Target(BaseModel):
 
 
 def create_app(store: Store | None = None, queue: JobQueue | None = None, listener: listen.Listener | None = None,
-               gemini=None, keys=keychain, check_key=llm.check_key) -> FastAPI:
+               client=None, keys=keychain, connect=llm.connect) -> FastAPI:
     config.ensure_dirs()
     store = store or Store(config.DB_PATH)
     queue = queue or JobQueue(store, pipeline.ingest, ableton.is_running)
     listener = listener or listen.Listener(store)
-    gemini = gemini or (lambda: llm.Gemini(store))
+    client = client or (lambda: llm.Client(store))
     comparison: dict = {}   # the latest comparison, so "ask about it" has something to talk about
 
     def llm_call(fn):
         """Run an LLM-backed call; turn its failures into the sentence the window shows."""
         try:
-            return fn(gemini())
+            return fn(client())
         except llm.LLMError as e:
-            code = "no_key" if isinstance(e, llm.NoKey) else "credits" if isinstance(e, llm.OutOfCredits) else "error"
-            raise HTTPException(503, {"message": str(e), "code": code})
+            raise HTTPException(503, {"message": str(e), "code": e.code})
 
     def library_call(fn):
         try:
@@ -138,23 +143,37 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
             raise HTTPException(404)
         return {"answer": llm_call(lambda g: coach.ask(store, g, track_id, body.question))}
 
-    # ---- Gemini key: goes straight into the Keychain, is never returned, logged or stored in a file ----
+    # ---- the API key: any company's. It goes straight into the Keychain and is never returned, logged or
+    # kept in a file; the window only ever learns which company and model are connected. ----
+    def summary():
+        c = keys.get()
+        p = PROVIDERS.get(c["provider"]) if c else None
+        return {"configured": bool(c and p), "provider": p.id if p else None, "name": p.name if p else None,
+                "model": c["model"] if c and p else None}
+
     @app.get("/settings")
     def settings():
-        return {"gemini_key": keys.exists()}
+        return summary()
 
-    @app.post("/settings/gemini-key")
-    def save_key(body: GeminiKey):
+    @app.get("/settings/providers")
+    def providers():
+        return llm.providers_for_ui()
+
+    @app.post("/settings/llm")
+    def save_key(body: ApiKey):
         try:
-            check_key(body.key.strip())            # free call: proves the key works before it is saved
-            keys.set(body.key)
+            creds = connect(body.key, body.provider, body.base_url, body.model)   # free call: proves it works first
+            keys.set(asdict(creds))
         except llm.LLMError as e:
-            raise HTTPException(400, str(e))
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+            raise HTTPException(400, {"message": str(e), "code": e.code, "providers": llm.providers_for_ui()})
         except RuntimeError as e:
-            raise HTTPException(500, str(e))
-        return {"gemini_key": True}
+            raise HTTPException(500, {"message": str(e), "code": "error"})
+        return summary()
+
+    @app.delete("/settings/llm")
+    def remove_key():
+        keys.delete()
+        return summary()
 
     # ---- collections ----
     @app.get("/collections")

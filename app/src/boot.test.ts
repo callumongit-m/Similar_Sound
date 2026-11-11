@@ -1,6 +1,6 @@
 // Boots the real page against a fake service. Catches startup crashes (the window renders nothing) and
 // checks the three parts behave: Add song, Collections, Compare my project.
-import { beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(() => Promise.resolve()) }));
 vi.mock("@tauri-apps/api/dpi", () => ({ LogicalSize: class { constructor(public width: number, public height: number) {} } }));
@@ -23,8 +23,12 @@ const GAPS = { reference: "UK minimal", n: 1, is_collection: true, small: true, 
   gaps: [{ label: "Bass · sub level (dB)", yours: -9.1, reference: -5.2, delta: -3.9, outside: true, n: 3, text: "Bass · sub level (dB): yours -9.1; UK minimal averages -5.2, range -6.4 to -3.9 (below all 3)" },
          { label: "Groove · swing", yours: 0, reference: 0.12, delta: -0.12, outside: false, n: 3, text: "Groove · swing: yours 0.00; UK minimal averages 0.12, range 0.10 to 0.14" }] };
 
-interface World { jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
+interface World { llm: any; keyBodies: any[]; jobs: any[]; tracks: any[]; collections: any[]; listen: any; askError: any; calls: { method: string; path: string; body: any }[]; keySaved: boolean }
 let W: World;
+// The real service gives a job the same track_key from the moment it is created, so one card can follow it.
+const keyFor = (url: string) => (url.endsWith("/free") ? "t2" : "k:" + url.split("/").pop()!.split("?")[0]);
+const NO_KEY = { configured: false, provider: null, name: null, model: null };
+const PROVIDERS = [{ id: "gemini", name: "Google Gemini", needs_address: false }, { id: "mistral", name: "Mistral", needs_address: false }, { id: "custom", name: "Other (OpenAI-compatible)", needs_address: true }];
 
 function fakeService() {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -39,11 +43,20 @@ function fakeService() {
     if (path === "/collections" && method === "GET") return ok(W.collections);
     if (path === "/collections" && method === "POST") { const c = { id: 9, name: body.name, track_ids: [] }; W.collections.push(c); return ok(c); }
     if (/^\/collections\/\d+\/tracks$/.test(path) && method === "POST") { W.collections.find((c) => c.id === Number(path.split("/")[2]))!.track_ids.push(body.track_id); return ok({}); }
-    if (path === "/jobs" && method === "POST") { W.jobs.unshift({ id: 5, source: body.url, status: "running", stage: "stems", error: null, title: "Some Song", artist: "Someone", track_key: "k5" }); return ok({ id: 5 }); }
+    if (path === "/jobs" && method === "POST") { W.jobs.unshift({ id: 5, source: body.url, status: "running", stage: "stems", error: null, title: "Some Song", artist: "Someone", track_key: keyFor(body.url) }); return ok({ id: 5 }); }
     if (path === "/tracks/t1") return ok(DOC);
     if (path.startsWith("/tracks/t1/similar")) return ok([]);
     if (path === "/tracks/t1/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: "It is rolling." }); }
-    if (path === "/settings/gemini-key") { W.keySaved = true; W.askError = null; return ok({ gemini_key: true }); }
+    if (path === "/settings" && method === "GET") return ok(W.llm);
+    if (path === "/settings/llm" && method === "POST") {
+      W.keyBodies.push(body);
+      if (body.key.startsWith("zzz") && !body.provider) return fail(400, { message: "I don't recognise that key's company. Pick it from the list.", code: "unknown_provider", providers: PROVIDERS });
+      if (body.key.startsWith("bad")) return fail(400, { message: "That key wasn't accepted. Add it again with the key icon.", code: "bad_key", providers: PROVIDERS });
+      W.keySaved = true; W.askError = null;
+      W.llm = { configured: true, provider: body.provider ?? "openai", name: body.provider ? "Mistral" : "OpenAI", model: "gpt-4.1-nano" };
+      return ok(W.llm);
+    }
+    if (path === "/settings/llm" && method === "DELETE") { W.llm = NO_KEY; return ok(W.llm); }
     if (path === "/listen") return ok(W.listen);
     if (path === "/listen/start") { W.listen = { ...W.listen, state: "waiting" }; return ok(W.listen); }
     if (path === "/listen/cancel") { W.listen = { ...W.listen, state: "idle" }; return ok(W.listen); }
@@ -62,12 +75,19 @@ const LISTEN = { state: "idle", level: 0, seconds: 0, message: "", ableton_runni
 
 async function boot() { await import("./main"); await tick(); }
 
+// Each test boots a fresh page, so the previous page's polling timers must die with it, or they keep
+// repainting the new test's DOM.
+const timers: number[] = [];
+const realSetInterval = window.setInterval.bind(window);
+window.setInterval = ((fn: TimerHandler, ms?: number, ...a: unknown[]) => { const id = realSetInterval(fn, ms, ...a); timers.push(id); return id; }) as typeof window.setInterval;
+afterEach(() => { timers.splice(0).forEach((id) => clearInterval(id)); });
+
 beforeEach(() => {
   vi.resetModules();
   document.body.innerHTML = '<div id="app"></div>';
   observed.length = 0;
   setSize.mockClear();
-  W = { jobs: [], tracks: [T1, T2], collections: [], listen: { ...LISTEN }, askError: null, calls: [], keySaved: false };
+  W = { llm: NO_KEY, keyBodies: [], jobs: [], tracks: [T1, T2], collections: [], listen: { ...LISTEN }, askError: null, calls: [], keySaved: false };
   vi.stubGlobal("ResizeObserver", FakeResizeObserver);
   fakeService();
 });
@@ -124,7 +144,7 @@ test("the stuck-drop prompt shows the message and a timestamp box", async () => 
   ($("#url") as HTMLInputElement).value = "https://soundcloud.com/x/hard";
   ($("#url") as HTMLInputElement).dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
   await tick(80);
-  W.jobs = [{ id: 5, source: "https://soundcloud.com/x/hard", status: "needs_timestamp", stage: "", error: "Sorry my system couldn't identify the main drop on this song, just give me the timestamp and I'll be able to carry on :)", title: "Hard", artist: "A", track_key: "k9" }];
+  W.jobs = [{ id: 5, source: "https://soundcloud.com/x/hard", status: "needs_timestamp", stage: "", error: "Sorry my system couldn't identify the main drop on this song, just give me the timestamp and I'll be able to carry on :)", title: "Hard", artist: "A", track_key: "k:hard" }];
   await tick(1400);
   expect($("#latest .card").textContent).toContain("just give me the timestamp");
   expect($("#latest input[data-ts]")).toBeTruthy();
@@ -244,8 +264,8 @@ test("running out of credits shows exactly 'I need more token credits'", async (
   expect($("#detail .answer").classList.contains("notice")).toBe(true);
 });
 
-test("without a key the ask box asks for it once, then retries and clears the key from the page", async () => {
-  W.askError = { message: "I need your Gemini key first.", code: "no_key" };
+test("without a key the ask box points at the key icon and its button opens the key panel", async () => {
+  W.askError = { message: "I need an API key first. Use the key icon at the top left.", code: "no_key" };
   await boot();
   tab("collections");
   click($("#unsorted .card.click"));
@@ -253,13 +273,82 @@ test("without a key the ask box asks for it once, then retries and clears the ke
   ($("#detail [data-q]") as HTMLTextAreaElement).value = "why?";
   click($("#detail [data-ask]"));
   await tick(80);
-  const input = $("#detail [data-key]") as HTMLInputElement;
-  expect(input.type).toBe("password");
-  input.value = "AIza" + "x".repeat(35);
-  click($("#detail [data-savekey]"));
-  await tick(120);
-  expect(W.keySaved).toBe(true);
-  expect(W.calls.find((c) => c.path === "/settings/gemini-key")!.body.key).toMatch(/^AIza/);
-  expect(document.body.innerHTML).not.toContain("AIza" + "x".repeat(35));          // never left in the page
-  expect($("#detail .answer").textContent).toBe("It is rolling.");                 // the question was retried
+  expect($("#detail .answer").textContent).toContain("key icon at the top left");
+  expect($("#keypanel").classList.contains("open")).toBe(false);
+  click($("#detail [data-openkey]"));
+  expect($("#keypanel").classList.contains("open")).toBe(true);
+});
+
+// ---------------- the key icon ----------------
+const key = (v: string) => { ($("#keypanel [data-key]") as HTMLInputElement).value = v; click($("#keypanel [data-save]")); };
+
+test("the key icon is top left, dim until a key is connected, and opens a password field", async () => {
+  await boot();
+  expect($(".titlebar").firstElementChild!.id).toBe("keybtn");
+  expect($("#keybtn").classList.contains("on")).toBe(false);
+  click($("#keybtn"));
+  expect($("#keypanel").classList.contains("open")).toBe(true);
+  expect(($("#keypanel [data-key]") as HTMLInputElement).type).toBe("password");
+  expect($("#keypanel [data-status]").textContent).toContain("No key yet");
+  click($("#keybtn"));
+  expect($("#keypanel").classList.contains("open")).toBe(false);
+});
+
+test("any company's key: saved without asking which company, shown back as the company, cleared from the page", async () => {
+  await boot();
+  click($("#keybtn"));
+  const secret = "sk-proj-" + "q".repeat(40);
+  key(secret);
+  await tick(80);
+  expect(W.keyBodies).toEqual([{ key: secret }]);                       // no provider chosen by the user: the service detects it
+  expect($("#keypanel [data-msg]").textContent).toBe("Connected.");
+  expect($("#keypanel [data-status]").textContent).toContain("OpenAI");
+  expect($("#keypanel [data-status]").textContent).toContain("gpt-4.1-nano");
+  expect(($("#keypanel [data-key]") as HTMLInputElement).value).toBe("");
+  expect(document.body.innerHTML).not.toContain("q".repeat(40));        // the key is not left anywhere in the page
+  expect($("#keybtn").classList.contains("on")).toBe(true);
+});
+
+test("a key it can't place asks which company, then saves it", async () => {
+  await boot();
+  click($("#keybtn"));
+  key("zzz" + "w".repeat(30));
+  await tick(80);
+  expect($("#keypanel [data-msg]").textContent).toContain("don't recognise");
+  const more = $("#keypanel [data-more]");
+  expect(more.hidden).toBe(false);
+  expect([...more.querySelectorAll("option")].map((o) => o.textContent)).toEqual(["Google Gemini", "Mistral", "Other (OpenAI-compatible)"]);
+  expect(more.querySelector<HTMLElement>("[data-address-row]")!.hidden).toBe(true);     // only "Other" needs an address
+  (more.querySelector("select") as HTMLSelectElement).value = "custom";
+  more.querySelector("select")!.dispatchEvent(new Event("change"));
+  expect(more.querySelector<HTMLElement>("[data-address-row]")!.hidden).toBe(false);
+  expect(more.querySelector<HTMLElement>("[data-model-row]")!.hidden).toBe(false);
+  (more.querySelector("select") as HTMLSelectElement).value = "mistral";
+  more.querySelector("select")!.dispatchEvent(new Event("change"));
+  click($("#keypanel [data-save]"));
+  await tick(80);
+  expect(W.keyBodies.at(-1)).toEqual({ key: "zzz" + "w".repeat(30), provider: "mistral" });
+  expect($("#keypanel [data-status]").textContent).toContain("Mistral");
+});
+
+test("a rejected key shows the reason and nothing is connected", async () => {
+  await boot();
+  click($("#keybtn"));
+  key("bad" + "e".repeat(30));
+  await tick(80);
+  expect($("#keypanel [data-msg]").textContent).toContain("wasn't accepted");
+  expect($("#keypanel [data-msg]").classList.contains("err")).toBe(true);
+  expect($("#keybtn").classList.contains("on")).toBe(false);
+});
+
+test("a connected key can be removed", async () => {
+  W.llm = { configured: true, provider: "anthropic", name: "Anthropic Claude", model: "claude-haiku-5-5" };
+  await boot();
+  expect($("#keybtn").classList.contains("on")).toBe(true);
+  click($("#keybtn"));
+  expect($("#keypanel [data-status]").textContent).toContain("Anthropic Claude");
+  click($("#keypanel [data-remove]"));
+  await tick(80);
+  expect($("#keybtn").classList.contains("on")).toBe(false);
+  expect($("#keypanel [data-status]").textContent).toContain("No key yet");
 });

@@ -219,3 +219,25 @@ code { background: var(--glass-hi); padding: 1px 6px; border-radius: 6px; font-s
 .answer.notice { border-color: rgba(255,255,255,.28); background: var(--glass-hi); }
 .answer.thinking { color: var(--muted); }
 .answer.keyform .row { gap: 8px; }
+
+/* ---------- API key: the icon (top left) and its sheet ---------- */
+.keybtn { position: relative; margin-right: 4px; }
+.keybtn.on { color: var(--text); }
+.keybtn.on::after { content: ""; position: absolute; right: 3px; bottom: 3px; width: 5px; height: 5px; border-radius: 50%; background: rgba(255,255,255,.9); box-shadow: 0 0 6px rgba(255,255,255,.6); animation: pop .4s var(--spring) both; }
+.keypanel { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .38s var(--ease), margin .38s var(--ease); margin: 0; }
+.keypanel.open { grid-template-rows: 1fr; margin: 10px 0 2px; }
+.kp-inner { overflow: hidden; }
+.kp-body { background: var(--glass); border: 1px solid var(--stroke-soft); border-radius: 18px; padding: 12px 14px; box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+  opacity: 0; transform: translateY(-6px); transition: opacity .3s ease, transform .35s var(--ease); }
+.keypanel.open .kp-body { opacity: 1; transform: none; }
+.kp-status { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
+.kp-status b { color: var(--text); font-weight: 600; }
+.kp-more { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; animation: rise .3s var(--ease) both; }
+.kp-more label { display: flex; flex-direction: column; gap: 4px; font-size: 11.5px; color: var(--muted); }
+.kp-more select.field { appearance: none; }
+.kp-msg { font-size: 12px; min-height: 16px; margin-top: 8px; color: var(--muted); }
+.kp-msg.err { color: var(--err); }
+.kp-msg.ok { color: var(--text); }
+.kp-foot { font-size: 11px; color: var(--faint); margin-top: 6px; line-height: 1.4; }
+.linkbtn { background: none; border: 0; padding: 0; color: var(--muted); text-decoration: underline; font-size: 11px; }
+.linkbtn:hover { color: var(--text); }

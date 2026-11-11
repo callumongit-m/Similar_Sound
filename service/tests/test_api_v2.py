@@ -14,13 +14,11 @@ from tests.test_coach import doc as make_doc
 
 
 class FakeKeys:
-    def __init__(self): self.key = None
-    def exists(self): return self.key is not None
-    def get(self): return self.key
-    def set(self, k):
-        import re
-        if not re.fullmatch(r"[A-Za-z0-9_\-]{20,100}", k.strip()): raise ValueError("That doesn't look like a Gemini API key.")
-        self.key = k.strip()
+    """Stands in for the macOS Keychain (the tests must never touch the real one)."""
+    def __init__(self): self.creds = None
+    def get(self): return self.creds
+    def set(self, creds): self.creds = creds
+    def delete(self): self.creds = None
 
 
 class SpyLLM:
@@ -38,9 +36,14 @@ def env(tmp_path):
     lst = listen.Listener(store, make_tap=lambda w: None, ableton_running=lambda: True, analyse=lambda w: project)
     keys, spy = FakeKeys(), SpyLLM()
     state = {"gem": lambda: spy}
+    def connect(key, provider=None, base_url=None, model=None):
+        if key.startswith("bad"):
+            raise llm.LLMError("That key wasn't accepted. Add it again with the key icon.", "bad_key")
+        if key.startswith("zzz") and not provider:
+            raise llm.LLMError("I don't recognise that key's company. Pick it from the list.", "unknown_provider")
+        return llm.Creds(provider or "openai", key, "gpt-4.1-nano")
     app = create_app(store, JobQueue(store, lambda *a, **k: None, lambda: True, peek=lambda s: None), lst,
-                     gemini=lambda: state["gem"](), keys=keys,
-                     check_key=lambda k: (_ for _ in ()).throw(llm.LLMError("Gemini didn't accept the key. Add it again.")) if k.startswith("bad") else None)
+                     client=lambda: state["gem"](), keys=keys, connect=connect)
     with TestClient(app) as c:
         yield c, store, keys, spy, state
 
@@ -48,15 +51,27 @@ def env(tmp_path):
 # ---------- key ----------
 def test_key_is_checked_then_saved_and_never_returned(env):
     c, store, keys, spy, state = env
-    assert c.get("/settings").json() == {"gemini_key": False}
-    r = c.post("/settings/gemini-key", json={"key": "bad" + "x" * 30})
-    assert r.status_code == 400 and "didn't accept the key" in r.json()["detail"] and keys.key is None
-    r = c.post("/settings/gemini-key", json={"key": "not a key"})
-    assert r.status_code == 400 and keys.key is None
-    good = "AIza" + "x" * 35
-    r = c.post("/settings/gemini-key", json={"key": good})
-    assert r.status_code == 200 and good not in r.text and keys.key == good
-    assert c.get("/settings").json() == {"gemini_key": True} and good not in c.get("/settings").text
+    assert c.get("/settings").json() == {"configured": False, "provider": None, "name": None, "model": None}
+    r = c.post("/settings/llm", json={"key": "bad" + "x" * 30})
+    assert r.status_code == 400 and r.json()["detail"]["code"] == "bad_key" and keys.creds is None
+    good = "sk-proj-" + "x" * 35
+    r = c.post("/settings/llm", json={"key": good})
+    assert r.status_code == 200 and good not in r.text
+    assert r.json() == {"configured": True, "provider": "openai", "name": "OpenAI", "model": "gpt-4.1-nano"}
+    assert keys.creds["key"] == good and good not in c.get("/settings").text
+    c.delete("/settings/llm")
+    assert keys.creds is None and c.get("/settings").json()["configured"] is False
+
+
+def test_an_unrecognised_key_asks_which_company_and_lists_them(env):
+    c, store, keys, spy, state = env
+    r = c.post("/settings/llm", json={"key": "zzz" + "x" * 35})
+    d = r.json()["detail"]
+    assert r.status_code == 400 and d["code"] == "unknown_provider"
+    assert {"gemini", "anthropic", "openai", "custom"} <= {p["id"] for p in d["providers"]}
+    r = c.post("/settings/llm", json={"key": "zzz" + "x" * 35, "provider": "mistral"})
+    assert r.status_code == 200 and r.json()["provider"] == "mistral"
+    assert c.get("/settings/providers").status_code == 200
 
 
 def test_ask_failures_carry_the_exact_sentence_and_a_code(env):

@@ -11,6 +11,8 @@ export interface TrackDoc extends TrackSummary {
   alternative_drops: number[];
   groove: { swing?: number };
 }
+export interface LlmSummary { configured: boolean; provider: string | null; name: string | null; model: string | null }
+export interface Provider { id: string; name: string; needs_address: boolean }
 export interface Similar { id: string; score: number; title: string }
 export interface Collection { id: number; name: string; track_ids: string[] }
 export type ListenState = "idle" | "waiting" | "listening" | "analysing" | "ready" | "error";
@@ -20,7 +22,7 @@ export interface Comparison { reference: string; n: number; is_collection: boole
 
 /** A failure with the sentence to show; `code` lets the UI react (e.g. ask for the Gemini key). */
 export class ApiError extends Error {
-  constructor(message: string, public code = "error") { super(message); }
+  constructor(message: string, public code = "error", public extra: any = undefined) { super(message); }
 }
 
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
@@ -33,7 +35,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const d = body.detail;
-    if (d && typeof d === "object" && "message" in d) throw new ApiError(d.message, d.code);
+    if (d && typeof d === "object" && "message" in d) throw new ApiError(d.message, d.code, d);
     throw new ApiError(typeof d === "string" ? d : `Request failed (${res.status})`);
   }
   return res.json() as Promise<T>;
@@ -53,9 +55,10 @@ export const api = {
   track: (id: string) => call<TrackDoc>(`/tracks/${id}`),
   similar: (id: string, kind = "groove") => call<Similar[]>(`/tracks/${id}/similar?kind=${kind}`),
   ask: (id: string, question: string) => post<{ answer: string }>(`/tracks/${id}/ask`, { question }),
-  // gemini key: sent once, stored in the Keychain by the service, never read back
-  hasKey: () => call<{ gemini_key: boolean }>("/settings"),
-  saveKey: (key: string) => post("/settings/gemini-key", { key }),
+  // the API key (any company): sent once, stored in the Keychain by the service, never read back
+  llm: () => call<LlmSummary>("/settings"),
+  saveKey: (body: { key: string; provider?: string; base_url?: string; model?: string }) => post<LlmSummary>("/settings/llm", body),
+  removeKey: () => del<LlmSummary>("/settings/llm"),
   // collections
   collections: () => call<Collection[]>("/collections"),
   newCollection: (name: string) => post<Collection>("/collections", { name }),
