@@ -15,17 +15,24 @@
         "label": "main",
         "title": "Similar Sound",
         "width": 400,
-        "height": 640,
+        "height": 96,
         "minWidth": 340,
-        "minHeight": 420,
+        "minHeight": 96,
         "decorations": false,
         "transparent": true,
         "alwaysOnTop": true,
-        "resizable": true,
+        "resizable": false,
         "shadow": true,
         "acceptFirstMouse": true,
         "theme": "Dark",
-        "dragDropEnabled": false
+        "dragDropEnabled": false,
+        "windowEffects": {
+          "effects": [
+            "hudWindow"
+          ],
+          "state": "active",
+          "radius": 24
+        }
       }
     ],
     "security": {
