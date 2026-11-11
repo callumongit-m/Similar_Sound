@@ -300,6 +300,11 @@ def _choose_drop(y, sr, edges, bar, energy):
     return finish((main, []), 0.2, "step_" + mode, mode)
 
 
+def estimate_bpm(y: np.ndarray, sr: int) -> float:
+    """Tempo of any steady 4/4 audio (raises ValueError for silence or rhythm-free audio)."""
+    return _bar_edges(y, sr)[0]
+
+
 def find_segments(y: np.ndarray, sr: int, drop_start_override: float | None = None,
                   trace: dict | None = None) -> Segments:
     """Pass a dict as `trace` to have every decision recorded (tempo, per-bar energy, ranked candidates,

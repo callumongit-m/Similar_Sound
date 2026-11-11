@@ -189,22 +189,25 @@ def detect_key(tonal_mono: np.ndarray) -> str:
     return label
 
 
-def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: float) -> dict:
-    """mix/stems: (ch, samples) at SR covering build then drop; `split_s` is where the drop starts."""
-    cut = int(split_s * SR)
+def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: float | None) -> dict:
+    """mix/stems: (ch, samples) at SR. With `split_s` the clip is build then drop (the drop starts there)
+    and arrangement metrics are included; with None the whole clip is measured (a captured project)."""
+    cut = int((split_s or 0) * SR)
     drop = lambda a: a[:, cut:]
     build = lambda a: a[:, :cut]
 
     tonal = (stems["bass"] + stems["other"]).mean(0)
-    arrangement = {
-        "build_rms_db": _rms_db(build(mix).mean(0)),
-        "drop_rms_db": _rms_db(drop(mix).mean(0)),
-        "build_low_db": _low_db(build(mix).mean(0)),
-        "drop_low_db": _low_db(drop(mix).mean(0)),
-        "stem_rise_db": {n: round(_rms_db(drop(s).mean(0)) - _rms_db(build(s).mean(0)), 2)
-                         for n, s in stems.items() if n != "vocals"},
-    }
-    arrangement["rise_db"] = round(arrangement["drop_rms_db"] - arrangement["build_rms_db"], 2)
+    arrangement = None
+    if split_s is not None:
+        arrangement = {
+            "build_rms_db": _rms_db(build(mix).mean(0)),
+            "drop_rms_db": _rms_db(drop(mix).mean(0)),
+            "build_low_db": _low_db(build(mix).mean(0)),
+            "drop_low_db": _low_db(drop(mix).mean(0)),
+            "stem_rise_db": {n: round(_rms_db(drop(s).mean(0)) - _rms_db(build(s).mean(0)), 2)
+                             for n, s in stems.items() if n != "vocals"},
+        }
+        arrangement["rise_db"] = round(arrangement["drop_rms_db"] - arrangement["build_rms_db"], 2)
     return {
         "bpm": round(bpm, 2),
         "key": detect_key(tonal),

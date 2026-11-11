@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS vectors(track_id TEXT, kind TEXT, dim INTEGER, data B
 CREATE TABLE IF NOT EXISTS jobs(id INTEGER PRIMARY KEY AUTOINCREMENT, source TEXT, status TEXT,
                                 stage TEXT, error TEXT, track_id TEXT, created REAL, updated REAL,
                                 title TEXT, artist TEXT);
+CREATE TABLE IF NOT EXISTS usage(day TEXT PRIMARY KEY, calls INTEGER);
+CREATE TABLE IF NOT EXISTS collections(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT UNIQUE, created REAL);
+CREATE TABLE IF NOT EXISTS collection_tracks(collection_id INTEGER, track_id TEXT, added REAL,
+                                             PRIMARY KEY(collection_id, track_id));
+CREATE TABLE IF NOT EXISTS projects(id INTEGER PRIMARY KEY AUTOINCREMENT, created REAL, doc TEXT);
 """
 
 

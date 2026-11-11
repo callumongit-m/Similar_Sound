@@ -1,0 +1,179 @@
+// audiotap: records one app's audio output using a Core Audio process tap (macOS 14.2+), with no
+// virtual audio driver. Used to hear Ableton Live while the user presses play.
+//
+//   audiotap --pid <pid> --out <file.wav> [--max <seconds>]
+//
+// stdout: "L <rms> <seconds>" about ten times a second.  Stops on SIGINT/SIGTERM or at --max, then
+// writes a float32 WAV. Exit codes: 0 ok, 2 bad arguments / setup failure, 3 no permission, 4 no such app.
+import AVFoundation
+import CoreAudio
+import Foundation
+
+func die(_ message: String, code: Int32) -> Never {
+    FileHandle.standardError.write((message + "\n").data(using: .utf8)!)
+    exit(code)
+}
+
+// ---- arguments
+var pid: pid_t = 0
+var outPath = ""
+var maxSeconds = 90.0
+var args = Array(CommandLine.arguments.dropFirst())
+while !args.isEmpty {
+    let flag = args.removeFirst()
+    guard !args.isEmpty else { die("missing value for \(flag)", code: 2) }
+    let value = args.removeFirst()
+    switch flag {
+    case "--pid": pid = pid_t(value) ?? 0
+    case "--out": outPath = value
+    case "--max": maxSeconds = Double(value) ?? 90
+    default: die("unknown flag \(flag)", code: 2)
+    }
+}
+guard pid > 0, !outPath.isEmpty else { die("usage: audiotap --pid <pid> --out <file.wav> [--max <s>]", code: 2) }
+
+// ---- helpers
+func property<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, qualifier: UnsafeRawPointer? = nil,
+                 qualifierSize: UInt32 = 0, as: T.Type) -> T? {
+    var address = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                             mElement: kAudioObjectPropertyElementMain)
+    var size = UInt32(MemoryLayout<T>.size)
+    let value = UnsafeMutablePointer<T>.allocate(capacity: 1)
+    defer { value.deallocate() }
+    guard AudioObjectGetPropertyData(object, &address, qualifierSize, qualifier, &size, value) == noErr else { return nil }
+    return value.pointee
+}
+
+func processObject(for pid: pid_t) -> AudioObjectID? {
+    var p = pid
+    let obj = property(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyTranslatePIDToProcessObject,
+                       qualifier: &p, qualifierSize: UInt32(MemoryLayout<pid_t>.size), as: AudioObjectID.self)
+    return (obj ?? 0) == 0 || obj == AudioObjectID(kAudioObjectUnknown) ? nil : obj
+}
+
+func defaultOutputUID() -> String? {
+    guard let dev = property(AudioObjectID(kAudioObjectSystemObject), kAudioHardwarePropertyDefaultSystemOutputDevice,
+                             as: AudioObjectID.self) else { return nil }
+    return (property(dev, kAudioDevicePropertyDeviceUID, as: CFString?.self) ?? nil) as String?
+}
+
+// ---- the tap
+guard let procObject = processObject(for: pid) else {
+    die("That app isn't producing audio yet. Press play in Ableton.", code: 4)
+}
+let tapDescription = CATapDescription(stereoMixdownOfProcesses: [procObject])
+tapDescription.uuid = UUID()
+tapDescription.muteBehavior = .unmuted          // Ableton keeps playing out loud as normal
+
+var tapID = AudioObjectID(kAudioObjectUnknown)
+let tapStatus = AudioHardwareCreateProcessTap(tapDescription, &tapID)
+guard tapStatus == noErr else {
+    die("couldn't create the audio tap (status \(tapStatus)); is audio recording allowed?", code: 3)
+}
+
+guard let outputUID = defaultOutputUID() else { die("no default output device", code: 2) }
+let aggregate: [String: Any] = [
+    kAudioAggregateDeviceNameKey: "SimilarSoundTap",
+    kAudioAggregateDeviceUIDKey: UUID().uuidString,
+    kAudioAggregateDeviceMainSubDeviceKey: outputUID,
+    kAudioAggregateDeviceIsPrivateKey: true,
+    kAudioAggregateDeviceIsStackedKey: false,
+    kAudioAggregateDeviceTapAutoStartKey: true,
+    kAudioAggregateDeviceSubDeviceListKey: [[kAudioSubDeviceUIDKey: outputUID]],
+    kAudioAggregateDeviceTapListKey: [[kAudioSubTapDriftCompensationKey: true,
+                                       kAudioSubTapUIDKey: tapDescription.uuid.uuidString]],
+]
+var aggregateID = AudioObjectID(kAudioObjectUnknown)
+guard AudioHardwareCreateAggregateDevice(aggregate as CFDictionary, &aggregateID) == noErr else {
+    die("couldn't create the capture device", code: 2)
+}
+
+guard var format = property(tapID, kAudioTapPropertyFormat, as: AudioStreamBasicDescription.self) else {
+    die("couldn't read the tap's audio format", code: 2)
+}
+let channels = Int(format.mChannelsPerFrame)
+let sampleRate = format.mSampleRate
+guard format.mFormatID == kAudioFormatLinearPCM, format.mBitsPerChannel == 32, channels > 0 else {
+    die("unexpected tap format", code: 2)
+}
+
+// ---- recording state (touched from the IO thread and the main loop)
+let lock = NSLock()
+var samples = [Float]()
+samples.reserveCapacity(Int(sampleRate * maxSeconds) * channels + 4096)
+var windowSumSquares = 0.0
+var windowCount = 0
+var stop = false
+
+var ioProc: AudioDeviceIOProcID?
+let ioStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregateID, DispatchQueue(label: "similar-sound.tap")) {
+    _, inputData, _, _, _ in
+    let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+    lock.lock()
+    for buffer in buffers {
+        guard let data = buffer.mData else { continue }
+        let n = Int(buffer.mDataByteSize) / MemoryLayout<Float>.size
+        let floats = data.assumingMemoryBound(to: Float.self)
+        for i in 0..<n {
+            let v = floats[i]
+            windowSumSquares += Double(v * v)
+        }
+        windowCount += n
+        if samples.count + n <= samples.capacity { samples.append(contentsOf: UnsafeBufferPointer(start: floats, count: n)) }
+    }
+    lock.unlock()
+}
+guard ioStatus == noErr, let proc = ioProc else { die("couldn't start recording", code: 2) }
+guard AudioDeviceStart(aggregateID, proc) == noErr else { die("couldn't start recording", code: 3) }
+
+// ---- stop on SIGINT / SIGTERM
+var signalSources = [DispatchSourceSignal]()
+for sig in [SIGINT, SIGTERM] {
+    signal(sig, SIG_IGN)
+    let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+    source.setEventHandler { stop = true }
+    source.resume()
+    signalSources.append(source)
+}
+
+// ---- report levels until told to stop
+let started = Date()
+let timer = DispatchSource.makeTimerSource(queue: .main)
+timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
+timer.setEventHandler {
+    lock.lock()
+    let rms = windowCount > 0 ? (windowSumSquares / Double(windowCount)).squareRoot() : 0
+    windowSumSquares = 0; windowCount = 0
+    let recorded = Double(samples.count) / Double(channels) / sampleRate
+    lock.unlock()
+    print(String(format: "L %.5f %.2f", rms, recorded))
+    fflush(stdout)
+    if stop || recorded >= maxSeconds || Date().timeIntervalSince(started) > maxSeconds + 5 {
+        timer.cancel()
+        finish()
+    }
+}
+timer.resume()
+
+func finish() -> Never {
+    AudioDeviceStop(aggregateID, proc)
+    AudioDeviceDestroyIOProcID(aggregateID, proc)
+    AudioHardwareDestroyAggregateDevice(aggregateID)
+    AudioHardwareDestroyProcessTap(tapID)
+    lock.lock()
+    let data = samples
+    lock.unlock()
+    guard let wavFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: sampleRate,
+                                        channels: AVAudioChannelCount(channels), interleaved: true),
+          let file = try? AVAudioFile(forWriting: URL(fileURLWithPath: outPath), settings: wavFormat.settings,
+                                      commonFormat: .pcmFormatFloat32, interleaved: true),
+          let buffer = AVAudioPCMBuffer(pcmFormat: wavFormat, frameCapacity: AVAudioFrameCount(data.count / channels))
+    else { die("couldn't write the recording", code: 2) }
+    buffer.frameLength = buffer.frameCapacity
+    data.withUnsafeBufferPointer { src in
+        if let dst = buffer.floatChannelData?[0], let base = src.baseAddress { dst.update(from: base, count: data.count) }
+    }
+    do { try file.write(from: buffer) } catch { die("couldn't write the recording: \(error)", code: 2) }
+    exit(0)
+}
+dispatchMain()

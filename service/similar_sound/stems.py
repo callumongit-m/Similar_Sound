@@ -1,12 +1,17 @@
 """Demucs stem split on the already-cut clip. Heavy: callers run it one job at a time."""
 from __future__ import annotations
 
+import threading
+
 import numpy as np
 import torch
 
 from . import config
 
 _model = None
+# One Demucs at a time, whoever asks (the queue worker or a project you just played): two at once
+# would fight over memory and make both slow.
+_LOCK = threading.Lock()
 
 
 def _device() -> str:
@@ -24,6 +29,13 @@ def _load():
 
 def split(clip: np.ndarray) -> dict[str, np.ndarray]:
     """clip: (channels, samples) at STEM_SR. Returns stem name -> (channels, samples)."""
+    from demucs.apply import apply_model
+
+    with _LOCK:
+        return _split_locked(clip)
+
+
+def _split_locked(clip: np.ndarray) -> dict[str, np.ndarray]:
     from demucs.apply import apply_model
 
     model = _load()

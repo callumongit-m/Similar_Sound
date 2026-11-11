@@ -20,3 +20,4 @@ app/src-tauri/icons/android/
 app/src-tauri/icons/ios/
 app/src-tauri/icons/Square*.png
 app/src-tauri/icons/StoreLogo.png
+service/tools/audiotap
