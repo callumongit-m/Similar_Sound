@@ -178,3 +178,30 @@ def test_an_open_request_is_about_everything_even_after_a_narrow_question():
 @pytest.mark.parametrize("text", ["The loop data shows no hits.", "From the measured spectrum data it is dark.", "The raw audio analysis says so."])
 def test_narration_with_words_in_between_is_caught(text):
     assert qa.check(text, "")
+
+
+def test_an_unrequested_not_known_caveat_is_caught_and_cut():
+    text = "The bass is on E1. The specific timbres and exact melodies for these synths are not known."
+    assert any("caveat" in p for p in qa.check(text, "E1"))
+    assert qa.scrub(text) == "The bass is on E1."
+
+
+def test_collection_digest_gives_each_song_its_bass_busyness_with_held_notes_kept_apart_from_new_notes():
+    docs = [with_loops(tid=t) for t in "ab"]
+    docs[0]["loops"]["bass"]["loop"] = ["E1 ~ ~ ~ . . . . . . . . . . . ."]          # one note held for four steps
+    docs[0]["loops"]["bass"]["sounding_steps_per_bar"] = 4.0
+    digest = json.loads(coach.collection_digest("Tech", docs))
+    first = digest["songs"][0]
+    assert first["bass_sounding_steps_per_bar"] == 4.0 and first["bass_notes_started_per_bar"] == 1.0
+    assert "never call sounding steps 'hits'" in coach.COLLECTION_SYSTEM_NOTE
+    assert "average_notes_started_per_bar" in digest["loop_patterns"]["bass"]
+
+
+def test_a_collection_chat_does_not_coach():
+    assert "no production advice" in coach.COLLECTION_SYSTEM_NOTE
+
+
+def test_a_song_with_no_bass_in_its_drop_says_so_in_its_digest_line():
+    d = with_loops(tid="a")
+    d["loops"]["bass"] = {"absent_in_the_drop": True}
+    assert json.loads(coach.collection_digest("T", [d, with_loops(tid="b")]))["songs"][0]["bass"] == "no bass playing in the drop"

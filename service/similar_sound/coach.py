@@ -338,7 +338,10 @@ COLLECTION_SYSTEM_NOTE = (
     "numbers and say how many songs they hold for. You know each song's bass line (notes per 16th step), how many bars "
     "each layer takes to repeat, and which steps the leads, pads and vocals hit with their pitch classes (a sketch, "
     "not a transcription). You do not know patch or sound-design settings or exact synth melodies: say so in one plain "
-    "sentence if asked. If they ask a follow-up, use the conversation so far."
+    "sentence if asked. These are references to learn from: describe what the songs do and why it works, but give no "
+    "production advice, Ableton steps or 'try this' tips unless they ask how to make, recreate or improve something. "
+    "'sounding steps' are 16th steps where a bass note is playing, held notes included; 'notes started' counts only new "
+    "notes: never call sounding steps 'hits'. If they ask a follow-up, use the conversation so far."
 )
 
 
@@ -369,6 +372,19 @@ def _step_patterns(docs: list[dict]) -> dict:
     return out
 
 
+def _bass_stats(lp: dict) -> dict:
+    """Per song: how busy the bass is. Sounding steps include held notes; started notes are only new ones."""
+    bass = (lp or {}).get("bass") or {}
+    if bass.get("absent_in_the_drop"):
+        return {"bass": "no bass playing in the drop"}
+    bars = [b.split() for b in bass.get("loop", [])]
+    if not bars:
+        return {}
+    return {"bass_loop_bars": bass["repeats_every_bars"],
+            "bass_sounding_steps_per_bar": bass.get("sounding_steps_per_bar"),
+            "bass_notes_started_per_bar": round(float(np.mean([sum(t not in (".", "~") for t in bar) for bar in bars])), 1)}
+
+
 def _loop_patterns(docs: list[dict]) -> dict:
     """What the songs' bass lines and layers have in common, from the songs that have loop data."""
     lps = [d["loops"] for d in docs if d.get("loops") and not d["loops"].get("empty")]
@@ -382,7 +398,8 @@ def _loop_patterns(docs: list[dict]) -> dict:
         out["bass"].update({
             "most_used_notes_across_songs": dict(Counter(n for b in bass for n in list(b.get("notes_by_share", {}))[:2]).most_common(5)),
             "loop_length_in_bars_counts": dict(Counter(b["repeats_every_bars"] for b in bass)),
-            "average_sounding_steps_per_bar": round(float(np.mean([b.get("sounding_steps_per_bar", 0) for b in bass])), 1)})
+            "average_sounding_steps_per_bar_held_notes_included": round(float(np.mean([b.get("sounding_steps_per_bar", 0) for b in bass])), 1),
+            "average_notes_started_per_bar": round(float(np.mean([s["bass_notes_started_per_bar"] for s in map(_bass_stats, [lp for lp in lps if not lp["bass"].get("absent_in_the_drop")]) if "bass_notes_started_per_bar" in s])), 1)})
     for layer, label in (("leads", "leads"), ("other", "pads_and_other"), ("vocals", "vocals")):
         got = [lp[layer] for lp in lps if layer in lp and not lp[layer].get("absent_in_the_drop")]
         if got:
@@ -419,6 +436,7 @@ def _digest(name: str, docs: list[dict]) -> dict:
         "loop_patterns": _loop_patterns(docs),
         "songs": [{"title": d.get("title"), "artist": d.get("artist"), "bpm": round(d["bpm"]), "key": d["key"],
                    **({"swing": d["groove"]["swing"]} if not d["groove"].get("empty") else {}), "lufs": d["mix"]["lufs"],
+                   **_bass_stats(d.get("loops")),
                    **({"bass_bar_1": d["loops"]["bass"]["loop"][0]} if (d.get("loops") or {}).get("bass", {}).get("loop") else {})}
                   for d in docs[:MAX_SONG_LINES]],
     }

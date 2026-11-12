@@ -102,6 +102,7 @@ BANNED = [
     (re.compile(r"\b(i|we)\s+(can('|no)t|cannot|can not|am unable to|'m unable to)\s+(actually\s+)?(hear|listen|see)\b", re.I),
      "says it cannot hear the audio"),
     (re.compile(r"\bas an ai\b", re.I), "says 'as an AI'"),
+    (re.compile(r"\b(are|is|remain|remains)\s+(not|n't)\s+known\b|\bnot known\b", re.I), "adds an unrequested 'not known' caveat"),
 ]
 _NUMBER = re.compile(r"(?<![\w.#])-?\d+(?:\.\d+)?")
 # small whole numbers are steps, bars, counts and ordinals; they are not measurements worth checking
