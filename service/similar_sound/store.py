@@ -71,9 +71,10 @@ class Store:
     # tracks
     def add(self, doc: dict, vectors: dict[str, np.ndarray]) -> None:
         with self._lock:
+            old = self._db.execute("SELECT created FROM tracks WHERE id=?", (doc["id"],)).fetchone()   # re-analysis keeps its place in the list
             self._db.execute("INSERT OR REPLACE INTO tracks(id,source,title,artist,created,doc,bpm,key,key_alt) VALUES (?,?,?,?,?,?,?,?,?)",
                              (doc["id"], doc["source"], doc.get("title", ""), doc.get("artist", ""),
-                              time.time(), json.dumps(doc), *self._summary(doc)))
+                              old["created"] if old else time.time(), json.dumps(doc), *self._summary(doc)))
             self._db.execute("DELETE FROM vectors WHERE track_id=?", (doc["id"],))
             for kind, v in vectors.items():
                 v = np.asarray(v, dtype=np.float32)

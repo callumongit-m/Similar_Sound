@@ -112,3 +112,11 @@ def test_only_the_newest_projects_are_kept():
         s.execute("INSERT INTO projects(created, doc) VALUES (?, '{}')", (i,))
     s.prune_projects()
     assert [r["id"] for r in s.execute("SELECT id FROM projects ORDER BY id")] == [5, 6, 7, 8, 9]
+
+
+def test_reanalysing_a_song_replaces_its_data_but_keeps_its_place_in_the_list():
+    s = Store(":memory:")
+    s.add(doc(1), {}); time.sleep(0.01); s.add(doc(2), {})
+    assert [t["id"] for t in s.list()] == ["t2", "t1"]
+    s.add(doc(1, bpm=130.0), {})
+    assert [t["id"] for t in s.list()] == ["t2", "t1"] and s.list()[1]["bpm"] == 130.0
