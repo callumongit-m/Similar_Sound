@@ -12,28 +12,24 @@ from dataclasses import dataclass
 import numpy as np
 
 from .features import BAND_NAMES
+from . import qa
 from .llm import LLM
 from .store import Store
 
 SYSTEM = (
-    "You coach a beginner (1 month in) making UK minimal tech house in Ableton. Everything you know comes from "
-    "measurements pulled from the audio. Say so by framing what you tell them as coming from that data, with "
-    "phrases like 'Based off the data pulled from the audio...', 'The measurements taken from the audio show...' "
-    "or 'According to the data from the audio...' (vary the wording, do not repeat the same opener). NEVER say you "
-    "cannot hear, listen to, or see the audio, never describe that as a limitation and never apologise for it. "
-    "When the data cannot answer something (a patch's exact timbre, sound choice), say 'the data pulled from the "
-    "audio can't tell us that' instead. "
+    "You coach a beginner (1 month in) making UK minimal tech house in Ableton. "
     "Be concrete and plain-spoken: name the instrument/bus, the direction and rough size of the change, and "
     "one Ableton move to try (device, setting). No jargon without a short explanation. Prioritise the 3 biggest "
-    "gaps, not everything. Hedge honestly: groove and sound choice are partly beyond these measurements. "
-    "Stems: 'drums', 'bass' and 'other' (synths, leads, pads, vocals: everything that is neither drums nor bass). "
+    "gaps, not everything. Hedge honestly: groove and sound choice are partly beyond what is known here. "
+    "Layers: drums, bass, vocals, leads (the rhythmic note-by-note synths: stabs, plucks, arps, lead lines) and "
+    "'other' (sustained pads, held chords, FX). The lead/other split is approximate. "
     "If 'key_could_also_be' is present the key is a close call between those keys: say so rather than naming one. "
     "'loops' (when present) is what each layer plays in the drop, read bar by bar over 16 steps: the bass line is "
-    "reliable note by note; the synth layer is only the steps it hits and the pitch classes sounding there (a sketch of "
-    "its rhythm and harmony, NOT a transcription of its melody); say so if asked for exact synth notes. A layer marked "
-    "absent_in_the_drop is not playing in the drop: say that. If 'loops' is missing the song was analysed before loops "
-    "were measured: say that song has no loop data yet rather than guessing. "
-    "Quote numbers exactly as given and never invent a measurement that is not in the data. Loudness differences "
+    "reliable note by note; leads, pads and vocals are only the steps they hit and the pitch classes sounding there "
+    "(a sketch of rhythm and harmony, NOT a transcription of a melody); say so if asked for exact synth notes. A layer "
+    "marked absent_in_the_drop is not playing in the drop: say that. If 'loops' says not_measured_for_this_song, "
+    "say that song has no loop information yet rather than guessing. "
+    "Quote numbers exactly as given and never invent a number that is not given. Loudness differences "
     "between an unmastered project and a mastered reference reflect mastering, not mixing: say so."
 )
 
@@ -52,7 +48,7 @@ class Gap:
     text: str          # the line the window shows
 
 
-STEMS = {"drums": "Drums", "bass": "Bass", "other": "Synths/other"}
+STEMS = {"drums": "Drums", "bass": "Bass", "vocals": "Vocals", "leads": "Leads", "other": "Pads/other"}
 LANES = {"kick": "kick", "mid": "mid-range percussion", "hat": "hats"}
 WIDTHS = ("low end", "mids", "highs")
 
@@ -113,12 +109,22 @@ def gaps(yours: dict, refs: list[dict], top: int = 8, ref_name: str = "the refer
     return sorted(out, key=lambda g: -g.score)[:top]
 
 
+LAYER_DEFINITIONS = {
+    "drums": "everything percussive: kick, claps, hats, percussion",
+    "bass": "the bass instrument (sub and bassline)",
+    "vocals": "vocals and vocal chops",
+    "leads": "the rhythmic, note-by-note part of the synths (stabs, plucks, arps, lead lines). Separated from the rest of "
+             "the synths by how the sound moves in time, so approximate: some lead sound can sit in 'other' and vice versa",
+    "other": "what is left of the synths: sustained pads, held chords, drones, FX beds (the same approximate split)",
+}
+
 LOOPS_HOW_TO_READ = (
     "Each pattern string is one bar of 16 steps, step 0 first (step 0 is the kick's beat; steps 0, 4, 8, 12 are the "
     "quarter-note beats, odd steps the off-beat 16ths). Bass: a note name where a note starts, '~' where it carries "
     "on, '.' where silent. Synth: the pitch classes sounding where a hit lands ('E+G+B'), '.' elsewhere. Drums: k = kick, "
     "m = mid-range percussion, h = hats. 'repeats_every_bars' is the shortest loop length that matches; "
-    "'bars_matching' is how closely later bars repeat it (1 = identical).")
+    "'bars_matching' is how closely later bars repeat it (1 = identical). A layer flagged very_quiet is faint and partly "
+    "bleed from the other stems, so hedge about what it plays.")
 
 
 def _loops(doc: dict) -> dict:
@@ -130,8 +136,9 @@ def _loops(doc: dict) -> dict:
         return {"not_measurable": "no steady beat grid was found in the drop"}
     out = {"how_to_read": LOOPS_HOW_TO_READ, "bars_analysed": lp["bars_analysed"],
            "whole_groove_repeats_every_bars": lp["whole_groove_repeats_every_bars"]}
-    for layer in ("bass", "other", "drums"):
-        out["synth_and_other" if layer == "other" else layer] = lp[layer]
+    for layer in ("bass", "leads", "other", "vocals", "drums"):
+        if layer in lp:
+            out["pads_and_other" if layer == "other" else layer] = lp[layer]
     out["what_lands_on_each_16th_step"] = lp["what_lands_on_each_16th_step"]
     return out
 
@@ -166,6 +173,7 @@ def labelled(doc: dict) -> dict:
                      "spectrum_dB_relative_to_total": bands(doc["mix"]["band_energy_db"]),
                      "stereo_width_0_mono_to_1_wide": dict(zip(WIDTH_RANGES, doc["mix"]["stereo_width"]))},
         "stems": {name: stem(m) for name, m in doc["stems"].items()},
+        "layer_definitions": {k: v for k, v in LAYER_DEFINITIONS.items() if k in doc["stems"]},
         "groove": groove,
         "loops": _loops(doc),
     }
@@ -191,25 +199,68 @@ def _neighbours(store: Store, track_id: str, k: int) -> list[dict]:
     return out
 
 
+LOOP_TOPICS = {"loops", "bass", "leads", "pads", "vocals", "drums", "groove", "key"}
+
+
+def _wanted_layers(topics: frozenset[str]) -> set[str]:
+    return {qa.LAYER_OF_TOPIC[t] for t in topics if t in qa.LAYER_OF_TOPIC}
+
+
+def _song_slice(doc: dict, topics: frozenset[str]) -> dict:
+    """The labelled song data, cut down to what the question touches (all of it when the question is open)."""
+    full = labelled(doc)
+    if topics == qa.ALL:
+        return full
+    out = {k: full[k] for k in ("title", "artist", "bpm", "key", "key_could_also_be") if k in full}
+    wanted = _wanted_layers(topics) or ({"drums"} if topics & {"groove", "loops"} else set())
+    if "mix" in topics:
+        out["full_mix"] = full["full_mix"]
+    if wanted:
+        out["stems"] = {n: m for n, m in full["stems"].items() if n in wanted}
+        out["layer_definitions"] = {n: d for n, d in full["layer_definitions"].items() if n in wanted}
+    if "groove" in topics or "drums" in topics:
+        out["groove"] = full["groove"]
+    if topics & LOOP_TOPICS:
+        lp = full["loops"]
+        if "how_to_read" in lp:
+            keep = {"bass", "leads", "pads_and_other", "vocals", "drums"} if topics & {"loops", "groove", "key"} else \
+                   {{"drums": "drums", "bass": "bass", "leads": "leads", "other": "pads_and_other", "vocals": "vocals"}[l] for l in wanted}
+            lp = {k: v for k, v in lp.items() if k in keep or k in ("how_to_read", "bars_analysed", "whole_groove_repeats_every_bars", "what_lands_on_each_16th_step")}
+        out["loops"] = lp
+    if topics & {"arrangement", "mix"} and "build_to_drop" in full:
+        out["build_to_drop"] = full["build_to_drop"]
+    return out
+
+
+def _json(d) -> str:
+    return json.dumps(d, separators=(",", ":"), ensure_ascii=False)
+
+
 def ask(store: Store, llm: LLM, track_id: str, question: str, history: tuple = ()) -> str:
     doc = store.get(track_id)
     if doc is None:
         raise KeyError(track_id)
-    context = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
-               "coach them or list fixes unless they ask for that. Answer exactly the question asked, in a few plain "
-               "sentences, quoting the measured numbers. Frame it as coming from the audio's data ('Based off the data "
-               "pulled from the audio...'), never as something you failed to hear. No other preamble or disclaimers. "
-               "If they ask a follow-up, use the conversation so far.\n\n"
-               f"Measured data for the build+drop of this reference track:\n{_summary(doc)}\n\n"
-               f"Closest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}")
-    return llm.complete(f"{SYSTEM}\n\n{context}", question, history)
+    brief = ("This is a REFERENCE track the user is studying to understand it. It is not their own project, so do not "
+             "coach them or list fixes unless they ask for that: no production advice, no Ableton steps and no 'to "
+             "recreate this' tips unless they ask how to make, recreate or fix something. Answer exactly the question "
+             "asked, in a few plain sentences, quoting numbers where they help. If they ask a follow-up, use the conversation so far. "
+             "Everything below describes the track's build and drop.")
+
+    def context(topics: frozenset[str]) -> str:
+        text = _json(_song_slice(doc, topics))
+        if "similar" in topics:
+            text += f"\nClosest tracks in the library: {json.dumps(_neighbours(store, track_id, 3))}"
+        return text
+
+    return qa.answer(llm, qa.Source(f"{SYSTEM}\n\n{brief}", context), question, history)
 
 
 SMALL_COLLECTION = 5
 
 
 # which measured differences explain which part of the feel
-ASPECT_GAPS = {"mix": ("Mix ·",), "groove": ("Groove ·",), "drums": ("Drums ·",), "bass": ("Bass ·",), "other": ("Synths/other ·",)}
+ASPECT_GAPS = {"mix": ("Mix ·",), "groove": ("Groove ·",), "drums": ("Drums ·",), "bass": ("Bass ·",),
+               "other": ("Leads ·", "Pads/other ·", "Vocals ·")}   # the embedding's "other" is everything that is not drums or bass
 
 
 def related_gaps(all_gaps: list[Gap], kind: str, n: int = 3) -> list[dict]:
@@ -236,31 +287,44 @@ def compare_project(yours: dict, refs: list[dict], ref_name: str, is_collection:
     }
 
 
+ASPECT_OF_TOPIC = {"mix": "mix", "groove": "groove", "drums": "drums", "bass": "bass",
+                   "leads": "other", "pads": "other", "vocals": "other"}
+PREFIXES_OF_TOPIC = {"drums": ("Drums ·",), "groove": ("Groove ·",), "bass": ("Bass ·",), "leads": ("Leads ·",),
+                     "pads": ("Pads/other ·",), "vocals": ("Vocals ·",), "mix": ("Mix ·",),
+                     "arrangement": ("Build to drop ·", "Drums · rise", "Bass · rise", "Leads · rise", "Pads/other · rise", "Vocals · rise")}
+
+
 def ask_about_comparison(llm: LLM, project: dict, comparison: dict, question: str, history: tuple = ()) -> str:
-    table = [{"metric": g["label"], "yours": g["yours"], "reference_average": g["reference"],
-              "reference_range": [g["low"], g["high"]], "beyond_every_reference_song": g["outside"]}
-             for g in comparison["gaps"]]
     feel = comparison.get("feel")
-    feel_text = ""
-    if feel and feel["aspects"]:
-        rows = [{"aspect": a["label"], "closeness_0_to_100": a["score"], "typical_for_the_references": a["typical"],
-                 "how_much_further_than_typical": a["gap"], "closest": a["closest"], "furthest": a["furthest"]} for a in feel["aspects"]]
-        why = comparison["why"].get(feel["weakest"], []) if feel["weakest"] else []
-        feel_text = ("HOW IT FEELS (measured with audio embeddings, i.e. how a listener hears it, not the numbers below):\n"
-                     f"{json.dumps(rows, ensure_ascii=False)}\n"
-                     "closeness_0_to_100 is how close your project's feel is to the references. It is only meaningful next to "
-                     "'typical_for_the_references', which is how close the reference songs are to each other: "
-                     "'how_much_further_than_typical' above 0 means your project is further from them than they are from one another. "
-                     f"{'The furthest aspect is ' + feel['weakest'] + '. Measured differences behind it: ' + json.dumps([w['text'] for w in why], ensure_ascii=False) if feel['weakest'] else ''}\n"
-                     f"{'' if feel['reliable'] else 'Caveat: ' + feel['note']}\n\n")
-    prompt = (f"This is the user's own work-in-progress, captured live from Ableton, compared against "
-              f"{comparison['reference']} ({comparison['n']} song(s): {comparison['references']}).\n"
-              f"{comparison['note']}\n\n"
-              f"Their project, measured:\n{_summary(project)}\n\n"
-              f"{feel_text}"
-              f"The biggest measured differences, most important first:\n{json.dumps(table, ensure_ascii=False)}\n\n"
-              "If they ask a follow-up, use the conversation so far.")
-    return llm.complete(f"{SYSTEM}\n\n{prompt}", question, history)
+    brief = (f"This is the user's own work-in-progress, captured live from Ableton, compared against "
+             f"{comparison['reference']} ({comparison['n']} song(s): {comparison['references']}). {comparison['note']} "
+             "If they ask a follow-up, use the conversation so far.")
+
+    def context(topics: frozenset[str]) -> str:
+        prefixes = tuple(p for t in topics for p in PREFIXES_OF_TOPIC.get(t, ()))
+        picked = [g for g in comparison["gaps"] if g["label"].startswith(prefixes)] if prefixes else []
+        table = [{"metric": g["label"], "yours": g["yours"], "reference_average": g["reference"],
+                  "reference_range": [g["low"], g["high"]], "beyond_every_reference_song": g["outside"]}
+                 for g in (picked or comparison["gaps"])]
+        parts = [f"Their project:\n{_json(_song_slice(project, topics))}"]
+        if feel and feel["aspects"]:
+            aspects = {ASPECT_OF_TOPIC[t] for t in topics if t in ASPECT_OF_TOPIC}
+            shown = [a for a in feel["aspects"] if a["label"] in aspects] or feel["aspects"]
+            rows = [{"aspect": a["label"], "closeness_0_to_100": a["score"], "typical_for_the_references": a["typical"],
+                     "how_much_further_than_typical": a["gap"], "closest": a["closest"], "furthest": a["furthest"]} for a in shown]
+            why = comparison["why"].get(feel["weakest"], []) if feel["weakest"] else []
+            parts.append(
+                "HOW IT FEELS (audio embeddings: how a listener hears it, separate from the numbers):\n"
+                f"{_json(rows)}\n"
+                "closeness_0_to_100 is how close the project's feel is to the references. It is only meaningful next to "
+                "'typical_for_the_references', which is how close the reference songs are to each other: "
+                "'how_much_further_than_typical' above 0 means the project is further from them than they are from one another. "
+                + (f"The furthest aspect is {feel['weakest']}. Differences behind it: {_json([w['text'] for w in why])}\n" if feel["weakest"] else "")
+                + ("" if feel["reliable"] else "Caveat: " + feel["note"]))
+        parts.append(f"Biggest differences, most important first:\n{_json(table)}")
+        return "\n\n".join(parts)
+
+    return qa.answer(llm, qa.Source(f"{SYSTEM}\n\n{brief}", context), question, history)
 
 
 # ---------------------------------------------------------------- a whole collection
@@ -268,12 +332,13 @@ MAX_SONG_LINES = 40            # per-song lines in the digest; beyond that the s
 SHARED_TRAITS = 10
 VARIABLE_TRAITS = 6
 COLLECTION_SYSTEM_NOTE = (
-    "This is a COLLECTION: reference songs the user grouped as one sub-genre, measured over each song's main build "
+    "This is a COLLECTION: reference songs the user grouped as one sub-genre, covering each song's main build "
     "and drop. They want to understand what the songs HAVE IN COMMON and what makes the style work. Lead with traits "
-    "most songs share (the 'most_shared_traits' and 'drum_patterns' below), then name any clear outliers. Quote the "
-    "numbers and say how many songs they hold for. Frame it as coming from the data ('Based off the data pulled from "
-    "the audio...'). The data has each song's bass line (notes per 16th step), how many bars each layer takes to repeat, and which steps the synths hit with their pitch classes (a sketch, not a transcription): see 'loop_patterns'. It does NOT include patch or sound-design settings or exact synth melodies: for those, say what the data does show and that the data pulled from the audio can't tell us the rest. "
-    "If they ask a follow-up, use the conversation so far."
+    "most songs share ('most_shared_traits', 'drum_patterns', 'loop_patterns'), then name any clear outliers. Quote "
+    "numbers and say how many songs they hold for. You know each song's bass line (notes per 16th step), how many bars "
+    "each layer takes to repeat, and which steps the leads, pads and vocals hit with their pitch classes (a sketch, "
+    "not a transcription). You do not know patch or sound-design settings or exact synth melodies: say so in one plain "
+    "sentence if asked. If they ask a follow-up, use the conversation so far."
 )
 
 
@@ -318,14 +383,15 @@ def _loop_patterns(docs: list[dict]) -> dict:
             "most_used_notes_across_songs": dict(Counter(n for b in bass for n in list(b.get("notes_by_share", {}))[:2]).most_common(5)),
             "loop_length_in_bars_counts": dict(Counter(b["repeats_every_bars"] for b in bass)),
             "average_sounding_steps_per_bar": round(float(np.mean([b.get("sounding_steps_per_bar", 0) for b in bass])), 1)})
-    other = present("other")
-    if other:
-        out["synth_and_other"] = {"songs_with_it_in_the_drop": len(other),
-                                  "average_hits_per_bar": round(float(np.mean([o["hits_per_bar"] for o in other])), 1),
-                                  "loop_length_in_bars_counts": dict(Counter(o["repeats_every_bars"] for o in other))}
+    for layer, label in (("leads", "leads"), ("other", "pads_and_other"), ("vocals", "vocals")):
+        got = [lp[layer] for lp in lps if layer in lp and not lp[layer].get("absent_in_the_drop")]
+        if got:
+            out[label] = {"songs_with_it_in_the_drop": len(got),
+                          "average_hits_per_bar": round(float(np.mean([o["hits_per_bar"] for o in got])), 1),
+                          "loop_length_in_bars_counts": dict(Counter(o["repeats_every_bars"] for o in got))}
     out["whole_groove_loop_length_in_bars_counts"] = dict(Counter(lp["whole_groove_repeats_every_bars"] for lp in lps))
     placed = {}
-    for layer in ("kick", "mid-percussion", "hat", "bass", "synth"):
+    for layer in ("kick", "mid-percussion", "hat", "bass", "lead", "pad", "vocal"):
         freq = np.mean([[layer in step.split(": ", 1)[1].split("+") for step in lp["what_lands_on_each_16th_step"]]
                         for lp in lps], axis=0)
         placed[layer] = [i for i, f in enumerate(freq) if f >= 0.7]
@@ -333,7 +399,7 @@ def _loop_patterns(docs: list[dict]) -> dict:
     return out
 
 
-def collection_digest(name: str, docs: list[dict]) -> str:
+def _digest(name: str, docs: list[dict]) -> dict:
     """Everything the model needs to answer questions about a whole collection, in a size that does not grow with it:
     per-song headlines (the first MAX_SONG_LINES), then statistics over ALL the songs: which measured traits they share,
     which vary, and the drum step patterns most of them use."""
@@ -358,15 +424,40 @@ def collection_digest(name: str, docs: list[dict]) -> str:
     }
     if len(docs) > MAX_SONG_LINES:
         out["more_songs_not_listed"] = len(docs) - MAX_SONG_LINES
-    return json.dumps(out, separators=(",", ":"), ensure_ascii=False)
+    return out
+
+
+def collection_digest(name: str, docs: list[dict]) -> str:
+    return _json(_digest(name, docs))
+
+
+def _digest_slice(d: dict, topics: frozenset[str]) -> dict:
+    """The digest cut down to what the question touches (all of it when the question is open)."""
+    if topics == qa.ALL:
+        return d
+    keep = {k: v for k, v in d.items() if k in ("collection", "songs_count", "bpm", "keys_of_the_songs", "songs", "more_songs_not_listed")}
+    prefixes = tuple(p for t in topics for p in PREFIXES_OF_TOPIC.get(t, ()))
+    for key in ("most_shared_traits", "most_variable_traits"):
+        rows = [r for r in d[key] if r["metric"].startswith(prefixes)] if prefixes else []
+        if rows:
+            keep[key] = rows
+    if topics & {"drums", "groove", "loops"}:
+        keep["drum_patterns_16th_steps_0_to_15"] = d["drum_patterns_16th_steps_0_to_15"]
+    if topics & LOOP_TOPICS:
+        keep["loop_patterns"] = d["loop_patterns"]
+    return keep
+
+
+
 
 
 def ask_collection(store: Store, llm: LLM, name: str, docs: list[dict], question: str, history: tuple = ()) -> str:
     if not docs:
         raise ValueError("There are no songs in that collection yet.")
-    context = (f"{COLLECTION_SYSTEM_NOTE}\n\nMeasured data for the collection:\n{collection_digest(name, docs)}\n\n"
-               f"{_legend()}")
-    return llm.complete(f"{SYSTEM}\n\n{context}", question, history)
+    digest = _digest(name, docs)
+    context = lambda topics: f"{_json(_digest_slice(digest, topics))}\n\n{_legend()}"
+    return qa.answer(llm, qa.Source(f"{SYSTEM}\n\n{COLLECTION_SYSTEM_NOTE}", context), question, history)
+
 
 
 def _legend() -> str:

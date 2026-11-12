@@ -88,8 +88,9 @@ def test_a_collection_chat_sends_the_digest_in_the_instructions_and_the_question
     coach.ask_collection(None, spy, "UK minimal", collection(5), "what makes these catchy?", (("user", "hi"), ("assistant", "hello")))
     assert "UK minimal" in spy.system and "most_shared_traits" in spy.system and "Song 3" in spy.system
     assert spy.prompt.endswith("what makes these catchy?") and spy.history == (("user", "hi"), ("assistant", "hello"))
-    assert "Based off the data pulled from the audio" in spy.system                       # same framing as every other answer
-    assert "NOT include patch or sound-design settings or exact synth melodies" in spy.system       # honest about what was never measured
+    from similar_sound import qa
+    assert qa.VOICE in spy.system                                                          # same voice as every other answer
+    assert "do not know patch or sound-design settings or exact synth melodies" in spy.system       # honest about what was never measured
 
 
 def test_an_empty_collection_cannot_be_chatted_with():

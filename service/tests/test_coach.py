@@ -111,7 +111,7 @@ def test_what_the_llm_is_sent_contains_the_stems_and_their_labels():
     spy = Spy()
     coach.ask(s, spy, "a", "how loud is the bass stem?")
     assert '"bass":{"loudness_dB"' in spy.system and "sub (20-60 Hz)" in spy.system
-    assert "never invent a measurement" in spy.system and spy.prompt == "how loud is the bass stem?"
+    assert "never invent a number" in spy.system and spy.prompt == "how loud is the bass stem?"
 
 
 def test_a_reference_song_is_explained_not_coached():
@@ -140,15 +140,15 @@ def test_follow_up_questions_carry_the_conversation_and_the_data_stays_in_the_in
     assert "use the conversation so far" in spy.system
 
 
-def test_the_model_is_told_to_ground_answers_in_the_data_never_to_say_it_cannot_hear():
-    s = coach.SYSTEM
-    assert "Based off the data pulled from the audio" in s and "vary the wording" in s
-    assert "NEVER say you cannot hear" in s
-    assert "never the audio itself" not in s                      # the old wording that invited "I cannot hear the audio"
-    assert "can't tell us that" in s                                # what to say when the data cannot answer
+def test_the_voice_rules_forbid_narrating_the_source_and_saying_it_cannot_hear():
+    from similar_sound import qa
+    v = qa.VOICE
+    assert "Never say where your information comes from" in v and "'based on'" in v and "'the data'" in v
+    assert "Never say you cannot hear" in v
+    assert "Based off the data pulled from the audio" not in coach.SYSTEM and "vary the wording" not in coach.SYSTEM
 
 
-def test_a_songs_context_repeats_the_framing_instruction():
+def test_a_songs_context_carries_the_voice_rules():
     spy = EchoLLM()
     import tempfile, pathlib
     from similar_sound.store import Store
@@ -156,4 +156,5 @@ def test_a_songs_context_repeats_the_framing_instruction():
     d = doc(); d["groove"] = features.groove(drums(swing=0.0), 124)
     st.add(d, {"groove": np.array(d["groove"]["vector"], dtype=np.float32)})
     coach.ask(st, spy, "a", "what is the synth doing?")
-    assert "Based off the data pulled from the audio" in spy.system and "never as something you failed to hear" in spy.system
+    from similar_sound import qa
+    assert qa.VOICE in spy.system

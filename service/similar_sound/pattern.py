@@ -28,10 +28,13 @@ MAX_LOOP_BARS = 8                      # shortest period searched: 1, 2, 4, 8 ba
 MATCH_ENOUGH = 0.85                    # bars this alike count as "the same loop"
 SHOWN_BARS = 4                         # bars of a long loop written out for the model
 BASS_RANGE_HZ = (30.0, 300.0)
+QUIET_REL_DB = 20.0                    # this far below the loudest layer: faint, and partly stem leakage; flagged so it is hedged
 SILENT_DB = -50.0                      # a stem this quiet is leakage, not a part: report it as absent rather than read noise
 CHROMA_FLOOR = 0.6                     # a pitch class counts if it has this share of the step's strongest one
-LAYER_ONSET_BAND = {"bass": (20, 250), "other": (200, 8000)}
-LAYER_PROMINENCE = {"bass": features.ONSET_PROMINENCE, "other": 0.5}   # a held chord ripples; only real stabs should count
+SYNTH_LAYERS = ("leads", "other", "vocals")            # read as hits + the pitch classes sounding on them
+LAYER_ONSET_BAND = {"bass": (20, 250), "leads": (200, 8000), "other": (200, 8000), "vocals": (150, 8000)}
+LAYER_PROMINENCE = {"bass": features.ONSET_PROMINENCE, "leads": 0.5, "other": 0.5, "vocals": 0.5}   # a held chord ripples; only real hits should count
+PLACEMENT_NAMES = {"leads": "lead", "other": "pad", "vocals": "vocal"}
 
 
 def _note(midi: int) -> str:
@@ -169,53 +172,59 @@ def _written(bars: list[list[str]]) -> list[str]:
 
 
 def loops(stems: dict[str, np.ndarray], groove: dict) -> dict:
-    """stems: mono drums/bass/other of the drop at features.SR. groove: the dict features.groove() returned."""
+    """stems: mono drums, bass, leads, other and (when present) vocals of the drop at features.SR.
+    groove: the dict features.groove() returned."""
     if groove.get("empty"):
         return {"empty": True}
     grid = _Grid(groove, len(stems["drums"]) / features.SR)
     if grid.bars < 2:
         return {"empty": True}
 
-    def silent(x):
-        return 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-9) < SILENT_DB
+    level_db = lambda x: 20 * np.log10(np.sqrt(np.mean(x ** 2)) + 1e-9)
+    loudest = max(level_db(x) for x in stems.values())
+    absent = [n for n in ("bass", *SYNTH_LAYERS) if n not in stems or level_db(stems[n]) < SILENT_DB]
 
     out: dict = {"bars_analysed": grid.bars}
-    stems = {n: (np.zeros_like(x) if silent(x) else x) for n, x in stems.items()}
-    absent = [n for n in ("bass", "other") if not stems[n].any()]
-    bass_hits = _hit_grid(grid, stems["bass"], *LAYER_ONSET_BAND["bass"])
-    notes = _bass_notes(grid, stems["bass"])
-    bass = _bass_tokens(notes, bass_hits)
-    other_hits = _hit_grid(grid, stems["other"], *LAYER_ONSET_BAND["other"], LAYER_PROMINENCE["other"])
-    chroma = _chroma_by_step(grid, stems["other"])
-    other = _other_tokens(other_hits, chroma)
-    drums = _drum_tokens(groove, grid, stems["drums"])
+    tokens, hits = {}, {}
+    if "bass" not in absent:
+        hits["bass"] = _hit_grid(grid, stems["bass"], *LAYER_ONSET_BAND["bass"])
+        notes = _bass_notes(grid, stems["bass"])
+        tokens["bass"] = _bass_tokens(notes, hits["bass"])
+    for n in SYNTH_LAYERS:
+        if n not in absent:
+            hits[n] = _hit_grid(grid, stems[n], *LAYER_ONSET_BAND[n], LAYER_PROMINENCE[n])
+            tokens[n] = _other_tokens(hits[n], _chroma_by_step(grid, stems[n]))
+    tokens["drums"] = _drum_tokens(groove, grid, stems["drums"])
 
-    for name, tokens in (("bass", bass), ("other", other), ("drums", drums)):
-        p, match = _period(tokens)
-        out[name] = {"repeats_every_bars": p, "bars_matching": match, "loop": _written(_loop(tokens, p))}
-
-    sounding = notes[notes >= 0]
-    if sounding.size:
-        share = Counter(_note(int(n)) for n in sounding)
-        out["bass"]["notes_by_share"] = {k: round(v / sounding.size, 2) for k, v in share.most_common(5)}
-        out["bass"]["sounding_steps_per_bar"] = round(float((notes >= 0).sum() / grid.bars), 1)
-    pcs = Counter(tok for bar in other for t in bar if t != "." for tok in t.split("+") if tok != "x")
-    if pcs:
-        total = sum(pcs.values())
-        out["other"]["pitch_classes_by_share"] = {k: round(v / total, 2) for k, v in pcs.most_common(6)}
-    out["other"]["hits_per_bar"] = round(float(other_hits.sum() / grid.bars), 1)
-
+    for name, toks in tokens.items():
+        p, match = _period(toks)
+        out[name] = {"repeats_every_bars": p, "bars_matching": match, "loop": _written(_loop(toks, p))}
+    if "bass" in tokens:
+        sounding = notes[notes >= 0]
+        if sounding.size:
+            share = Counter(_note(int(x)) for x in sounding)
+            out["bass"]["notes_by_share"] = {k: round(v / sounding.size, 2) for k, v in share.most_common(5)}
+            out["bass"]["sounding_steps_per_bar"] = round(float((notes >= 0).sum() / grid.bars), 1)
+    for n in SYNTH_LAYERS:
+        if n in tokens:
+            pcs = Counter(t for bar in tokens[n] for tok in bar if tok != "." for t in tok.split("+") if t != "x")
+            if pcs:
+                total = sum(pcs.values())
+                out[n]["pitch_classes_by_share"] = {k: round(v / total, 2) for k, v in pcs.most_common(6)}
+            out[n]["hits_per_bar"] = round(float(hits[n].sum() / grid.bars), 1)
+            if level_db(stems[n]) < loudest - QUIET_REL_DB:
+                out[n]["very_quiet_so_partly_leakage_from_other_layers"] = True
     for n in absent:     # a layer that is not playing is a finding in itself ("no bass line in this drop")
         out[n] = {"absent_in_the_drop": True}
 
-    joint = [[f"{d}|{b}|{o}" for d, b, o in zip(*bars)] for bars in zip(drums, bass, other)]
+    joint = [["|".join(parts) for parts in zip(*bars)] for bars in zip(*tokens.values())]
     out["whole_groove_repeats_every_bars"] = _period(joint)[0]
     # which layers land on each step of a typical bar: the "sound placement" view
     lane_name = {"k": "kick", "m": "mid-percussion", "h": "hat"}
     placement = []
     for st in range(16):
-        layers = [lane_name[c] for c in "kmh" if np.mean([c in bar[st] for bar in drums]) >= 0.5]
-        layers += [n for n, h in (("bass", bass_hits), ("synth", other_hits)) if h[:, st].mean() >= 0.5]
+        layers = [lane_name[c] for c in "kmh" if np.mean([c in bar[st] for bar in tokens["drums"]]) >= 0.5]
+        layers += [PLACEMENT_NAMES.get(n, n) for n, h in hits.items() if h[:, st].mean() >= 0.5]
         placement.append(f"{st}: " + ("+".join(layers) if layers else "-"))
     out["what_lands_on_each_16th_step"] = placement
     return out

@@ -210,12 +210,13 @@ def detect_key(tonal_mono: np.ndarray) -> str:
 def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: float | None) -> dict:
     """mix/stems: (ch, samples) at SR. With `split_s` the clip is build then drop (the drop starts there)
     and arrangement metrics are included; with None the whole clip is measured (a captured project)."""
-    from . import pattern   # pattern builds on this module's onset and grid code, so it is imported here
+    from . import layers, pattern   # both build on this module's code, so they are imported here
     cut = int((split_s or 0) * SR)
     drop = lambda a: a[:, cut:]
     build = lambda a: a[:, :cut]
 
-    tonal = (stems["bass"] + stems["other"]).mean(0)
+    tonal = (stems["bass"] + stems["other"]).mean(0)       # the key is read from Demucs's own stems
+    stems = layers.five(stems)                              # from here on: drums, bass, vocals, leads, other
     arrangement = None
     if split_s is not None:
         arrangement = {
@@ -224,16 +225,16 @@ def extract(mix: np.ndarray, stems: dict[str, np.ndarray], bpm: float, split_s: 
             "build_low_db": _low_db(build(mix).mean(0)),
             "drop_low_db": _low_db(drop(mix).mean(0)),
             "stem_rise_db": {n: round(_rms_db(drop(s).mean(0)) - _rms_db(build(s).mean(0)), 2)
-                             for n, s in stems.items() if n != "vocals"},
+                             for n, s in stems.items()},
         }
         arrangement["rise_db"] = round(arrangement["drop_rms_db"] - arrangement["build_rms_db"], 2)
-    drop_stems = {n: drop(x).mean(0) for n, x in stems.items() if n != "vocals"}
+    drop_stems = {n: drop(x).mean(0) for n, x in stems.items()}
     groove_doc = groove(drop_stems["drums"], bpm)
     return {
         "bpm": round(bpm, 2),
         **key_info(rank_keys(tonal)),
         "mix": _mix_metrics(drop(mix)),
-        "stems": {n: _stem_metrics(drop(s)) for n, s in stems.items() if n != "vocals"},
+        "stems": {n: _stem_metrics(drop(s)) for n, s in stems.items()},
         "groove": groove_doc,
         "loops": pattern.loops(drop_stems, groove_doc),
         "arrangement": arrangement,

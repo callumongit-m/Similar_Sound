@@ -164,7 +164,7 @@ def test_project_analysis_measures_the_stems_and_groove_without_hunting_for_a_dr
     assert set(vectors) == {"mix", "drums", "bass", "other", "groove"}                 # the same vibe vectors a library song has
     assert len(vectors["groove"]) == features.GROOVE_DIM
     assert doc["kind"] == "project" and abs(doc["bpm"] - 124) < 1.5
-    assert set(doc["stems"]) == {"drums", "bass", "other"}
+    assert set(doc["stems"]) == {"drums", "bass", "vocals", "leads", "other"}
     assert doc["arrangement"] is None                                   # nothing to compare build vs drop on
     assert [i for i, h in enumerate(doc["groove"]["kick"]["hit"]) if h > 0.5] == [0, 4, 8, 12]
     assert 9 < doc["seconds"] < 16                                      # silence either side was trimmed

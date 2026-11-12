@@ -31,7 +31,7 @@ def build(bass_loop, chord_steps=(2, 6, 10, 14), chords_differ_on_bar=None):
                 continue
             chord = sum(tone(f, STEP * 1.5, 0.15) for f in (164.8, 196.0, 246.9))     # E3 G3 B3
             _place(other, chord, (b * 16 + s) * STEP)
-    return {"drums": drums(BPM, BARS), "bass": bass, "other": other}
+    return {"drums": drums(BPM, BARS), "bass": bass, "leads": other, "other": np.zeros(n)}
 
 
 def run(stems):
@@ -57,10 +57,10 @@ def test_a_one_bar_loop_is_reported_as_one_bar(simple):
 
 
 def test_synth_rhythm_and_pitch_classes(simple):
-    bar = simple["other"]["loop"][0].split()
+    bar = simple["leads"]["loop"][0].split()
     assert [i for i, t in enumerate(bar) if t != "."] == [2, 6, 10, 14]
     assert all(set(bar[i].split("+")) == {"E", "G", "B"} for i in (2, 6, 10, 14))
-    assert set(simple["other"]["pitch_classes_by_share"]) == {"E", "G", "B"}
+    assert set(simple["leads"]["pitch_classes_by_share"]) == {"E", "G", "B"}
 
 
 def test_drums_are_the_four_on_the_floor_with_offbeat_hats(simple):
@@ -71,7 +71,7 @@ def test_drums_are_the_four_on_the_floor_with_offbeat_hats(simple):
 
 def test_placement_says_what_lands_where(simple):
     p = simple["what_lands_on_each_16th_step"]
-    assert "kick" in p[0] and "bass" in p[0] and p[2] == "2: synth" and "hat" in p[1]   # (synthetic kicks and hats leak into the mid lane; real ones do too)
+    assert "kick" in p[0] and "bass" in p[0] and p[2] == "2: lead" and "hat" in p[1]   # (synthetic kicks and hats leak into the mid lane; real ones do too)
 
 
 def test_a_two_bar_bass_loop_is_found():
@@ -90,11 +90,11 @@ def test_a_two_bar_bass_loop_is_found():
 def test_one_odd_bar_lowers_the_match_without_changing_the_loop_length():
     got, _ = run(build({0: "E1", 6: "G1"}, chords_differ_on_bar=5))
     assert got["bass"]["repeats_every_bars"] == 1
-    assert got["other"]["bars_matching"] < 1.0
+    assert got["leads"]["bars_matching"] < 1.0
 
 
 def test_no_drums_means_no_loops():
-    assert pattern.loops({"drums": np.zeros(SR * 10), "bass": np.zeros(SR * 10), "other": np.zeros(SR * 10)},
+    assert pattern.loops({"drums": np.zeros(SR * 10), "bass": np.zeros(SR * 10), "leads": np.zeros(SR * 10), "other": np.zeros(SR * 10)},
                          features.groove(np.zeros(SR * 10), BPM)) == {"empty": True}
 
 
@@ -103,7 +103,7 @@ def test_a_silent_bass_stem_is_reported_absent_not_read_as_notes():
     stems["bass"] = stems["bass"] * 1e-5 + 1e-6 * np.random.default_rng(0).standard_normal(len(stems["bass"]))   # leakage: about -90 dB
     got, _ = run(stems)
     assert got["bass"] == {"absent_in_the_drop": True}
-    assert got["other"]["repeats_every_bars"] == 1                    # the other layers are unaffected
+    assert got["leads"]["repeats_every_bars"] == 1                    # the other layers are unaffected
 
 
 # ---- what the language model is shown
@@ -124,7 +124,7 @@ def with_loops(**kw):
 def test_the_model_is_shown_the_loops_with_how_to_read_them():
     shown = coach.labelled(with_loops())["loops"]
     assert "step 0" in shown["how_to_read"] and shown["bass"]["loop"][0].split()[0] == "E1"
-    assert shown["synth_and_other"]["loop"] and shown["what_lands_on_each_16th_step"][0].startswith("0:")
+    assert shown["leads"]["loop"] and shown["what_lands_on_each_16th_step"][0].startswith("0:")
 
 
 def test_old_songs_say_they_have_no_loop_data_instead_of_going_blank():
