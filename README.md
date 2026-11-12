@@ -176,6 +176,25 @@ narrate their source ("based on...", "the data shows..."), may not claim they ca
 they quote must be in the data or a difference, ratio or percentage of two of its numbers. Retrieval sends only the slice
 of the data a question touches, which keeps the model on topic and the context small.
 
+### 8. Ableton how-to steps
+
+```
+ "how do I make sure my groove stays intact?"
+        │ route: how-to phrasing detected  (adds "howto" next to the data topics)
+        ▼
+ howto.retrieve ──► top 3 cards from live_manual/live12.json (keyword + title match, none if nothing fits)
+        │            each card: exact click path, notes, source URL, confidence
+        ▼
+ system prompt gets: "Ableton steps. The user has Live 12.0.15 ..." + the cards
+        ▼
+ answer ──► check: any Live device/control named (Groove Pool, Utility, Legato, ...) that is NOT in the cards
+                   -> one rewrite, and the model is told to say it is unsure rather than guess
+```
+
+The cards are copied from Ableton's official Live 12 manual, not written from memory, and say so where the manual is
+silent (for example it never names a Browser sidebar category for grooves). The installed Live version is read from the
+app bundle. Live 13 can be added as `live_manual/live13.json` and selected by version.
+
 ## Requirements
 
 - macOS on Apple silicon (the Python environment is pinned to `darwin` / `arm64`)

@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import logging
 import re
+from functools import lru_cache
 from dataclasses import dataclass
 from typing import Callable, TypedDict
 
 from langgraph.graph import END, StateGraph
 
+from . import ableton, howto
 from .llm import LLM
 
 log = logging.getLogger("similar_sound.qa")
@@ -85,10 +87,13 @@ def route(question: str, history: tuple = ()) -> frozenset[str]:
     if _OPEN.search(question):                       # "explain this track": about everything, whatever came before
         return ALL
     found = topics_of(question)
+    asks_how = howto.is_howto(question)
     if not found and len(question.split()) <= 8:      # only a short follow-up ("why is that?") leans on the last question
         for role, text in reversed(history):
             if role == "user" and (found := topics_of(text)):
                 break
+    if asks_how:
+        found.add("howto")         # not one of TOPICS: it adds Ableton's own steps, it does not select a part of the data
     return frozenset(found) or ALL
 
 
@@ -102,6 +107,8 @@ BANNED = [
     (re.compile(r"\b(i|we)\s+(can('|no)t|cannot|can not|am unable to|'m unable to)\s+(actually\s+)?(hear|listen|see)\b", re.I),
      "says it cannot hear the audio"),
     (re.compile(r"\bas an ai\b", re.I), "says 'as an AI'"),
+    (re.compile(r"\b(verified|stored|given|provided) steps\b|\bsteps (given|provided|above)\b|\b(the|ableton'?s?|official)\s+(\w+\s+)?manual\b", re.I),
+     "mentions where its Ableton steps come from ('the verified steps', 'the manual')"),
     (re.compile(r"\b(are|is|remain|remains)\s+(not|n't)\s+known\b|\bnot known\b", re.I), "adds an unrequested 'not known' caveat"),
 ]
 _NUMBER = re.compile(r"(?<![\w.#])-?\d+(?:\.\d+)?")
@@ -136,8 +143,12 @@ def unsupported_numbers(answer: str, context: str, history_text: str = "") -> li
     return bad
 
 
-def check(answer: str, context: str, history_text: str = "") -> list[str]:
+def check(answer: str, context: str, history_text: str = "", cards: list[dict] | None = None) -> list[str]:
+    """cards: the Ableton steps retrieved for this question, or None when it was not a how-to question."""
     problems = [why for rx, why in BANNED if rx.search(answer)]
+    if cards is not None and (named := howto.unverified_terms(answer, cards)):
+        problems.append("names Ableton features that are not in the verified steps: " + ", ".join(named)
+                        + " (use only the steps given, or say you are not sure where that control is)")
     nums = unsupported_numbers(answer, context, history_text)
     if nums:
         problems.append("quotes numbers that are not in the data: " + ", ".join(nums[:6]))
@@ -168,10 +179,16 @@ class State(TypedDict, total=False):
     topics: frozenset
     system: str
     context: str
+    cards: object
     draft: str
     problems: list
     repaired: bool
     answer: str
+
+
+@lru_cache(maxsize=1)
+def _live_version() -> str | None:
+    return ableton.live_version()
 
 
 def _build(llm: LLM, source: Source):
@@ -182,14 +199,23 @@ def _build(llm: LLM, source: Source):
 
     def n_retrieve(s: State) -> State:
         ctx = source.context(s["topics"])
-        return {"context": ctx, "system": f"{VOICE}\n\n{source.brief}\n\nData:\n{ctx}"}
+        cards = None
+        if "howto" in s["topics"]:
+            # a short follow-up ("and where is that?") is about the previous question's subject as well
+            query = s["question"]
+            if len(query.split()) <= 8:
+                query += " " + " ".join(t for r, t in s["history"][-2:] if r == "user")
+            cards = howto.retrieve(query)
+            log.info("how-to steps retrieved: %s", ", ".join(c["id"] for c in cards) or "none")
+            ctx += "\n\n" + howto.render(cards, _live_version())
+        return {"context": ctx, "cards": cards, "system": f"{VOICE}\n\n{source.brief}\n\nData:\n{ctx}"}
 
     def n_answer(s: State) -> State:
         return {"draft": llm.complete(s["system"], s["question"], s["history"])}
 
     def n_check(s: State) -> State:
         hist = " ".join(t for _, t in s["history"])
-        problems = check(s["draft"], s["context"], hist)
+        problems = check(s["draft"], s["context"], hist, s.get("cards"))
         if problems:
             log.info("answer check failed (%s): %s", "after repair" if s.get("repaired") else "first draft", "; ".join(problems))
         return {"problems": problems}
