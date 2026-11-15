@@ -24,6 +24,17 @@ class Fetched:
     meta: names.Meta = names.Meta()      # the raw name fields, kept so names can be re-derived without the network
 
 
+class PreviewOnly(Exception):
+    """SoundCloud only offers a short preview of this track. The message is what the window shows."""
+
+
+def is_preview(info: dict) -> bool:
+    """True when the only audio SoundCloud gave is its ~30 s preview (a track that is blocked in your country,
+    or that the artist only published as a preview). Analysing it would find no drop."""
+    formats = [info.get("format_id") or ""] + [f.get("format_id") or "" for f in info.get("requested_formats") or []]
+    return any("preview" in f for f in formats)
+
+
 def split_title(title: str, uploader: str = "", artist: str = "") -> tuple[str, str]:
     """(song, artist) from the raw SoundCloud fields, with no library knowledge. See names.py for the rules."""
     return names.resolve(names.Meta(title, uploader, artist))
@@ -82,6 +93,11 @@ def fetch(source: str) -> Fetched:
     }
     with yt_dlp.YoutubeDL(opts) as ydl:
         info = ydl.extract_info(base, download=True)
+    if is_preview(info):
+        shutil.rmtree(work, ignore_errors=True)
+        raise PreviewOnly("SoundCloud is only giving me a 30-second preview of this track, so there is no drop to "
+                          "analyse. It is probably blocked in your country, or only published as a preview. "
+                          "Use a full version, or export your own bounce.")
     wav = next(work.glob("audio.wav"))
     meta = _meta(info)
     song, artist = names.resolve(meta)

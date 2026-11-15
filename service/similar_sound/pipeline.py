@@ -47,6 +47,11 @@ def ingest(source: str, checkpoint: Callable[[], None] = lambda: None,
         progress("segment")
         analysis = librosa.load(str(fetched.path), sr=config.ANALYSIS_SR, mono=True)[0]
         detection: dict = {}
+        length = len(analysis) / config.ANALYSIS_SR
+        if fetched.drop_start_override is not None and fetched.drop_start_override >= length - 1:
+            m, sec = divmod(int(length), 60)
+            raise ValueError(f"That timestamp is past the end of the audio, which is only {m}:{sec:02d} long. "
+                             "Check that this is the full track and not a preview.")
         seg = segment.find_segments(analysis, config.ANALYSIS_SR, fetched.drop_start_override, trace=detection)
         full = _load_stereo(fetched.path, config.STEM_SR)
         t0, t1 = int(seg.build[0] * config.STEM_SR), int(seg.drop[1] * config.STEM_SR)

@@ -112,3 +112,21 @@ def test_fetching_a_local_file_keeps_its_raw_name_fields(tmp_path):
     f = download.fetch(str(wav))
     assert f.meta == Meta("my bounce") and f.title == "my bounce"
     download.cleanup(f)
+
+
+def test_a_preview_only_track_is_recognised_so_it_is_not_analysed():
+    from similar_sound import download
+    assert download.is_preview({"format_id": "http_mp3_1_0_preview"})
+    assert download.is_preview({"format_id": "x", "requested_formats": [{"format_id": "hls_mp3_1_0_preview"}]})
+    assert not download.is_preview({"format_id": "hls_mp3_1_0"})
+
+
+def test_a_timestamp_past_the_end_of_the_audio_gets_a_clear_message(tmp_path, monkeypatch):
+    import numpy as np, soundfile as sf, pytest
+    from similar_sound import download, pipeline
+    wav = tmp_path / "a.wav"
+    sf.write(wav, np.zeros(22050 * 5, dtype="float32"), 22050)
+    monkeypatch.setattr(download, "fetch", lambda src: download.Fetched(wav, "t", "a", src, 107.0, download.names.Meta("t")))
+    monkeypatch.setattr(download, "cleanup", lambda f: None)
+    with pytest.raises(ValueError, match="past the end of the audio, which is only 0:05 long"):
+        pipeline.ingest("x")
