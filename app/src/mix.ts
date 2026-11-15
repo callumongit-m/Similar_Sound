@@ -40,22 +40,23 @@ let shown: number[] = [];                     // what is drawn: rises at once, f
 let peaks: number[] = [];                     // slow-falling peak line
 let lastFrame = 0;
 
-const COLS_PER_S = 120;                       // 30 frames a second x 4 slices
+const COLS_PER_S = 120;                       // 60 frames a second x 2 slices
+const LATENCY_COLS = 14;                      // the picture runs ~0.12 s behind the newest audio, so frames arriving in bursts never starve it
 const FIELDS = ["L", "R", "M", "S", "lo", "mid", "hi"] as const;
 type Field = (typeof FIELDS)[number];
-let ring: Record<Field, Float32Array> = makeRing();
-let pos = 0;                                  // where the next column goes
-let lastPush = 0;                             // when a column was last added (to scroll to silence between frames)
-
 const seconds = () => Number(settings.speed);
-const ringSize = () => Math.round(seconds() * COLS_PER_S);
-function makeRing() { return Object.fromEntries(FIELDS.map((f) => [f, new Float32Array(Math.round(Number(settings.speed) * COLS_PER_S))])) as Record<Field, Float32Array>; }
-function resetRing() { ring = makeRing(); pos = 0; }
+const windowCols = () => Math.round(seconds() * COLS_PER_S);
+const capacity = () => windowCols() + (settings.loop === "loop" ? 0 : 256);   // a looping picture is exactly one window long
+let ring: Record<Field, Float32Array> = makeRing();
+let recv = 0;                                 // columns received so far: the absolute index of the next one
+let head = 0;                                 // the playhead, in columns: advanced by the clock, not by arrivals
+let lastTick = 0;
+function makeRing() { return Object.fromEntries(FIELDS.map((f) => [f, new Float32Array(capacity())])) as Record<Field, Float32Array>; }
+function resetRing() { ring = makeRing(); recv = 0; head = 0; lastTick = 0; }
 function pushColumn(peak: number[], share: number[]) {
-  const v = [...peak, ...share];
-  FIELDS.forEach((f, i) => { ring[f][pos] = v[i]; });
-  pos = (pos + 1) % ringSize();
-  lastPush = performance.now();
+  const v = [...peak, ...share], at = recv % capacity();
+  FIELDS.forEach((f, i) => { ring[f][at] = v[i]; });
+  recv++;
 }
 
 // ---------- spectrum ----------
@@ -112,14 +113,19 @@ function paintSpectrum(cv: HTMLCanvasElement) {
   ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.35)"; ctx.stroke();
 }
 
-function stepSpectrum() {
+let lastSpec = 0;
+/** Smoothing by elapsed time, not per drawn frame, so it looks the same at 60 and 120 Hz and the 60-a-second data never steps. */
+function stepSpectrum(now: number) {
+  const dt = lastSpec ? Math.min(0.1, (now - lastSpec) / 1000) : 0;
+  lastSpec = now;
   if (!target.length) return;
   if (shown.length !== target.length) { shown = target.slice(); peaks = target.slice(); }
-  const idle = performance.now() - lastFrame > 600;          // no frames: let the wave settle to the floor
+  const idle = now - lastFrame > 600;                          // no frames: let the wave settle to the floor
+  const rise = 1 - Math.exp(-dt / 0.02), fall = 1 - Math.exp(-dt / 0.09);
   for (let i = 0; i < shown.length; i++) {
     const t = idle ? DB_BOTTOM : target[i];
-    shown[i] = t > shown[i] ? t : shown[i] + (t - shown[i]) * 0.22;
-    peaks[i] = shown[i] > peaks[i] ? shown[i] : peaks[i] - 0.35;
+    shown[i] += (t - shown[i]) * (t > shown[i] ? rise : fall);
+    peaks[i] = shown[i] > peaks[i] ? shown[i] : peaks[i] - 20 * dt;   // the peak line falls 20 dB a second
   }
 }
 
@@ -136,15 +142,19 @@ const CHANNELS: Record<string, Field[]> = { mid: ["M"], left: ["L"], right: ["R"
 const LANE_NAME: Record<Field, string> = { L: "L", R: "R", M: "Mid", S: "Side", lo: "", mid: "", hi: "" };
 const shape = (a: number) => Math.pow(Math.min(1, a), 0.7);  // a little lift so quiet passages stay visible
 
+/** Rigid scrolling: columns are grouped into fixed bins (by absolute index, so a column never changes bin) and each bin is
+ *  drawn at a fractional x from the steady playhead. Nothing is re-sampled from frame to frame, so nothing shimmers. */
 function paintWaveform(cv: HTMLCanvasElement) {
   const g = setup(cv);
   if (!g) return;
   const { ctx, w, h } = g;
-  const padB = 16, plotH = h - padB, n = ringSize();
+  const padB = 16, plotH = h - padB, N = windowCols(), cap = capacity();
   const lanes = CHANNELS[settings.chan] ?? CHANNELS.mid;
   const laneH = plotH / lanes.length;
   const loop = settings.loop === "loop";
-  const perPx = n / w;
+  const pxPerCol = w / N, B = Math.max(1, Math.round(1 / pxPerCol));
+  const first = loop ? 0 : Math.max(0, Math.floor((head - N) / B) + 1);     // oldest bin still in the window
+  const last = loop ? Math.floor(N / B) : Math.floor(head / B);              // bins fully played (the newest is still filling)
 
   ctx.font = "9px -apple-system, sans-serif";
   ctx.fillStyle = "rgba(255,255,255,0.4)";
@@ -157,41 +167,46 @@ function paintWaveform(cv: HTMLCanvasElement) {
     if (lanes.length > 1) { ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.textAlign = "left"; ctx.fillText(LANE_NAME[field], 4, li * laneH + 11); }
     const st = ctx.createLinearGradient(0, cy - half, 0, cy + half);
     st.addColorStop(0, PALETTE[3]); st.addColorStop(0.5, PALETTE[1]); st.addColorStop(1, PALETTE[3]);
-    for (let x = 0; x < w; x++) {
-      const from = Math.floor(x * perPx), to = Math.max(from + 1, Math.floor((x + 1) * perPx));
-      let peak = 0, lo = 0, mid = 0, hi = 0, c = 0;
-      for (let k = from; k < to && k < n; k++) {
-        const idx = loop ? k : (pos + k) % n;                   // scrolling: oldest on the left, newest on the right
-        peak = Math.max(peak, ring[field][idx]);
-        lo += ring.lo[idx]; mid += ring.mid[idx]; hi += ring.hi[idx]; c++;
+    for (let k = first; k < last; k++) {
+      let peak = 0, lo = 0, mid = 0, hi = 0;
+      for (let c = k * B; c < (k + 1) * B; c++) {
+        if (!loop && (c >= recv || c < recv - cap)) continue;                // not received yet, or already overwritten
+        const at = c % cap;
+        peak = Math.max(peak, ring[field][at]);
+        lo += ring.lo[at]; mid += ring.mid[at]; hi += ring.hi[at];
       }
       const a = shape(peak);
       if (a < 0.004) continue;
+      const x = loop ? k * B * pxPerCol : w - (head - k * B) * pxPerCol;
+      if (x + B * pxPerCol < 0) continue;
       if (settings.color === "static") ctx.fillStyle = st;
       else if (settings.color === "map") ctx.fillStyle = mapColor(a);
       else {
         const t = (lo + mid + hi) || 1;
-        const rgb = [0, 1, 2].map((k) => Math.round((BAND_COLORS[0][k] * lo + BAND_COLORS[1][k] * mid + BAND_COLORS[2][k] * hi) / t));
-        ctx.fillStyle = `rgb(${rgb.join(",")})`;
+        ctx.fillStyle = `rgb(${[0, 1, 2].map((q) => Math.round((BAND_COLORS[0][q] * lo + BAND_COLORS[1][q] * mid + BAND_COLORS[2][q] * hi) / t)).join(",")})`;
       }
-      ctx.fillRect(x, cy - a * half, 1, Math.max(1, a * half * 2));
+      ctx.fillRect(x, cy - a * half, B * pxPerCol + 0.6, Math.max(1, a * half * 2));   // +0.6 hides hairline seams between bins
     }
   });
-  if (loop) { ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.fillRect(Math.round((pos / n) * w), 0, 1, plotH); }
+  if (loop) { ctx.fillStyle = "rgba(255,255,255,0.7)"; ctx.fillRect(Math.round(((head % N) / N) * w), 0, 1, plotH); }
 }
 
-function stepWaveform() {
-  const now = performance.now();
-  if (!lastPush) lastPush = now;
-  if (now - lastFrame > 600 && now - lastPush > 1000 / COLS_PER_S) {   // no audio: scroll in silence
-    const missing = Math.min(Math.floor(((now - lastPush) / 1000) * COLS_PER_S), 20);
-    for (let i = 0; i < missing; i++) pushColumn([0, 0, 0, 0], [0, 0, 0]);
-  }
+/** Advance the playhead by real elapsed time, nudged toward "newest audio minus the latency" so it neither drifts nor jumps. */
+function stepWaveform(now: number) {
+  const dt = lastTick ? Math.min(0.1, (now - lastTick) / 1000) : 0;
+  lastTick = now;
+  const idle = now - lastFrame > 600;
+  if (idle) { for (let i = 0; i < Math.max(1, Math.round(dt * COLS_PER_S)); i++) pushColumn([0, 0, 0, 0], [0, 0, 0]); }
+  const aim = recv - LATENCY_COLS;
+  head += dt * COLS_PER_S + (aim - head) * Math.min(1, dt * 4);
+  if (head > recv) head = recv;
+  if (settings.loop === "loop" && recv === 0) head = 0;
 }
 
 function animate(cv: HTMLCanvasElement) {
-  if (settings.view === "waveform") { stepWaveform(); paintWaveform(cv); }
-  else { stepSpectrum(); paintSpectrum(cv); }
+  const now = performance.now();
+  if (settings.view === "waveform") { stepWaveform(now); paintWaveform(cv); }
+  else { stepSpectrum(now); paintSpectrum(cv); }
   raf = requestAnimationFrame(() => animate(cv));
 }
 
@@ -254,7 +269,7 @@ export function mountMix(root: HTMLElement) {
 export function enterMix() {
   leaveMix();
   abort = new AbortController();
-  target = []; shown = []; peaks = []; resetRing();
+  target = []; shown = []; peaks = []; lastSpec = 0; resetRing();
   syncControls();
   $("#mixmsg").textContent = "Connecting…";
   raf = requestAnimationFrame(() => animate($<HTMLCanvasElement>("#mixcv")));

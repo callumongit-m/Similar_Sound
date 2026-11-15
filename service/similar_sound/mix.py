@@ -23,11 +23,11 @@ from . import ableton, listen
 log = logging.getLogger("similar_sound.mix")
 
 BANDS = 96
-FPS = 30
+FPS = 60
 FFT = 4096
 F_LO, F_HI = 20.0, 20000.0
 FLOOR_DB = -120.0
-SUBCOLS = 4                 # waveform columns per frame: 30 frames x 4 = 120 columns a second
+SUBCOLS = 2                 # waveform columns per frame: 60 frames x 2 = 120 columns a second
 LOW_HZ, HIGH_HZ = 250.0, 4000.0
 
 
