@@ -78,3 +78,21 @@ def test_endpoint_streams_server_sent_events(tmp_path):
             if len(lines) == 2:
                 break
     assert lines[0]["state"] == "live" and len(lines[0]["bands"]) == mix.BANDS
+
+
+def test_columns_give_peaks_for_left_right_mid_side():
+    block = np.zeros((1200, 2), dtype=np.float32)
+    block[:, 0] = 0.8                                # left only
+    cols = mix.columns(block)
+    assert len(cols) == mix.SUBCOLS
+    assert cols[0] == [0.8, 0.0, 0.4, 0.4]
+
+
+def test_tri_follows_where_the_energy_is():
+    an = mix.Analyser(RATE)
+    t = np.arange(mix.FFT) / RATE
+    an.push((0.5 * np.sin(2 * np.pi * 80 * t)).astype(np.float32)[:, None])
+    low, mid, high = mix.tri(an.bands())
+    assert low > 0.9 and abs(low + mid + high - 1) < 0.01
+    an.push((0.5 * np.sin(2 * np.pi * 8000 * t)).astype(np.float32)[:, None])
+    assert mix.tri(an.bands())[2] > 0.9

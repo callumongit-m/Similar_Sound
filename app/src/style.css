@@ -359,3 +359,11 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
 .mix { padding: 2px 0 4px; }
 .mix canvas { width: 100%; height: 230px; display: block; border-radius: 16px; background: rgba(0,0,0,0.22); border: 1px solid var(--stroke-soft); }
 .mix-status { text-align: center; color: var(--muted); font-size: 12px; min-height: 18px; margin-top: 8px; }
+.mix-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.mix-bar[hidden], .mix-wave[hidden] { display: none; }
+.mix-wave { display: contents; }
+.mix select { appearance: none; -webkit-appearance: none; font-size: 12px; padding: 5px 24px 5px 11px; border-radius: 999px; color: var(--text); cursor: pointer; outline: none;
+  background: var(--glass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23ffffff99' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 9px center;
+  border: 1px solid var(--stroke-soft); box-shadow: inset 0 1px 0 rgba(255,255,255,0.12); transition: background-color .15s, border-color .15s; }
+.mix select:hover, .mix select:focus { background-color: var(--glass-hi); border-color: var(--stroke); }
+.mix select option { color: #111; }

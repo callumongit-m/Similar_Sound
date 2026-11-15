@@ -164,6 +164,22 @@ test("Mix listens only while its tab is open and shows what the service says", a
   expect(signal.aborted).toBe(true);                                           // leaving closes the stream, which stops the helper
 });
 
+test("Mix has a Spectrum / Waveform choice; Waveform adds its own options (and works without browser storage)", async () => {
+  await boot();
+  tab("mix");
+  await tick(40);
+  const view = $("#mixview") as HTMLSelectElement;
+  expect([...view.options].map((o) => o.text)).toEqual(["Spectrum", "Waveform"]);
+  expect($("#mixwaveopts").hidden).toBe(true);                                 // spectrum has no extra options
+  view.value = "waveform";
+  view.dispatchEvent(new Event("change", { bubbles: true }));
+  expect($("#mixwaveopts").hidden).toBe(false);
+  expect([...($("#mixchan") as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Mid", "Left", "Right", "Side", "Left / Right", "Mid / Side"]);
+  expect([...($("#mixcolor") as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Multi-band", "Colour map", "Static"]);
+  view.value = "spectrum";
+  view.dispatchEvent(new Event("change", { bubbles: true }));
+});
+
 // ---------------- Add song ----------------
 test("Add song shows nothing from before this session, only what you add now", async () => {
   await boot();

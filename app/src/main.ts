@@ -7,7 +7,7 @@ import { openCollectionChat } from "./chat";
 import { collectionsHtml, mountCollections, updateCollections } from "./collections";
 import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare";
 import { openDetail } from "./detail";
-import { enterMix, leaveMix, mixHtml } from "./mix";
+import { enterMix, leaveMix, mixHtml, mountMix } from "./mix";
 import { keyPanelHtml, mountKeyPanel, toggleKeyPanel } from "./keypanel";
 import { BOOT_GRACE_MS, LIBRARY_SYNC_MS, S } from "./state";
 import { $, run, toast } from "./ui";
@@ -147,6 +147,7 @@ mountCollections(pane("collections"), {
   refresh: () => refresh(true),
 });
 mountCompare($("#cmp"));
+mountMix(pane("mix"));
 
 mountKeyPanel(() => render());
 $("#keybtn").onclick = () => toggleKeyPanel();

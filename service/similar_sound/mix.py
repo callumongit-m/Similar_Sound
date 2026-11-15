@@ -3,7 +3,9 @@
 Interface: MixMeter().frames() yields one JSON-able dict about 30 times a second for as long as the caller
 keeps iterating (the window's open stream). Closing the iterator stops the audio helper.
   {"state": "waiting", "message": ...}                      Ableton closed, or not playing yet
-  {"state": "live", "bands": [dB x BANDS], "rms": dB}       bands run 20 Hz to 20 kHz, log-spaced
+  {"state": "live", "bands": [dB x BANDS], "rms": dB,       bands run 20 Hz to 20 kHz, log-spaced
+   "cols": [[L, R, Mid, Side] peaks x SUBCOLS],              for the waveform: SUBCOLS time slices of this frame
+   "tri": [low, mid, high]}                                  share of the energy below 250 Hz / to 4 kHz / above
 The audio comes from the same Ableton process tap as "Compare my project", streamed (tools/audiotap --stream).
 It is analysed in memory and dropped: nothing is written to disk.
 """
@@ -25,6 +27,8 @@ FPS = 30
 FFT = 4096
 F_LO, F_HI = 20.0, 20000.0
 FLOOR_DB = -120.0
+SUBCOLS = 4                 # waveform columns per frame: 30 frames x 4 = 120 columns a second
+LOW_HZ, HIGH_HZ = 250.0, 4000.0
 
 
 class PcmSource(Protocol):
@@ -109,6 +113,28 @@ def rms_db(block: np.ndarray) -> float:
     return round(20 * np.log10(max(r, 1e-6)), 1)
 
 
+def columns(block: np.ndarray) -> list[list[float]]:
+    """Peak of left, right, mid and side for each of SUBCOLS time slices of the block."""
+    left = block[:, 0]
+    right = block[:, 1] if block.shape[1] > 1 else left
+    out = []
+    for l, r in zip(np.array_split(left, SUBCOLS), np.array_split(right, SUBCOLS)):
+        if not len(l):
+            out.append([0.0, 0.0, 0.0, 0.0])
+            continue
+        out.append([round(float(np.abs(x).max()), 3) for x in (l, r, (l + r) / 2, (l - r) / 2)])
+    return out
+
+
+def tri(bands: list[float]) -> list[float]:
+    """Share of the spectrum's energy in low / mid / high, from the band levels (they sum to 1)."""
+    power = 10 ** (np.array(bands) / 10)
+    c = np.sqrt(band_edges()[:-1] * band_edges()[1:])
+    parts = [power[c < LOW_HZ].sum(), power[(c >= LOW_HZ) & (c < HIGH_HZ)].sum(), power[c >= HIGH_HZ].sum()]
+    total = sum(parts)
+    return [round(float(p / total), 3) for p in parts] if total > 1e-9 else [0.0, 0.0, 0.0]
+
+
 class MixMeter:
     def __init__(self, make_source: Callable[[], PcmSource] = HelperSource, retry_s: float = 1.0):
         self._make, self._retry = make_source, retry_s
@@ -130,7 +156,8 @@ class MixMeter:
             try:
                 while (block := src.read(hop)) is not None:
                     an.push(block)
-                    yield {"state": "live", "bands": an.bands(), "rms": rms_db(block)}
+                    bands = an.bands()
+                    yield {"state": "live", "bands": bands, "rms": rms_db(block), "cols": columns(block), "tri": tri(bands)}
             finally:
                 src.close()
             yield {"state": "waiting", "message": "Ableton's audio stopped. Press play."}
