@@ -7,6 +7,7 @@ import { openCollectionChat } from "./chat";
 import { collectionsHtml, mountCollections, updateCollections } from "./collections";
 import { compareHtml, enterCompare, leaveCompare, mountCompare } from "./compare";
 import { openDetail } from "./detail";
+import { enterMix, leaveMix, mixHtml } from "./mix";
 import { keyPanelHtml, mountKeyPanel, toggleKeyPanel } from "./keypanel";
 import { BOOT_GRACE_MS, LIBRARY_SYNC_MS, S } from "./state";
 import { $, run, toast } from "./ui";
@@ -24,8 +25,8 @@ function ghostCards(n: number): string {
 }
 
 // ---------- shell ----------
-type Tab = "add" | "collections" | "compare";
-const TABS: [Tab, string][] = [["add", "Add song"], ["collections", "Collections"], ["compare", "Compare my project"]];
+type Tab = "add" | "collections" | "compare" | "mix";
+const TABS: [Tab, string][] = [["add", "Add song"], ["collections", "Collections"], ["compare", "Compare my project"], ["mix", "Mix"]];
 let tab: Tab = "add";
 const KEY_ICON = `<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="8" cy="15" r="4.2"/><path d="M11 12l9-9M16.5 6.5l2.5 2.5M14 9l2 2"/></svg>`;
 
@@ -43,6 +44,7 @@ $("#app").innerHTML = `
     <section id="pane-add" class="pane">${addSongHtml}<div class="ghostlist">${ghostCards(1)}</div></section>
     <section id="pane-collections" class="pane" hidden>${collectionsHtml}<div class="ghostlist">${ghostCards(3)}</div></section>
     <section id="pane-compare" class="pane" hidden>${compareHtml}</section>
+    <section id="pane-mix" class="pane" hidden>${mixHtml}</section>
     <section id="detail" class="pane" hidden></section>
   </div></div>
   <div id="toast"></div>`;
@@ -84,14 +86,23 @@ function fitWindow() {
 new ResizeObserver(fitWindow).observe($("#content")); // needs the shell above to exist
 
 // ---------- navigation ----------
+/** The highlight follows the active button's own box: the tabs are not all the same width. */
+function moveSlider() {
+  const b = document.querySelector<HTMLElement>("#nav [data-tab].active");
+  const s = $("#nav .slider");
+  if (b) { s.style.width = `${b.offsetWidth}px`; s.style.transform = `translateX(${b.offsetLeft - 3}px)`; }
+}
 function showTab(next: Tab) {
   const leaving = tab;
   tab = next;
   closeDetail(false);
-  $("#nav").style.setProperty("--i", String(TABS.findIndex(([k]) => k === next)));
   document.querySelectorAll<HTMLElement>("#nav [data-tab]").forEach((b) => b.classList.toggle("active", b.dataset.tab === next));
+  $("#nav").style.setProperty("--i", String(TABS.findIndex(([k]) => k === next)));   // also the state tests read
+  moveSlider();
   for (const [k] of TABS) pane(k).hidden = k !== next;
   if (leaving === "compare" && next !== "compare") leaveCompare();
+  if (leaving === "mix" && next !== "mix") leaveMix();
+  if (next === "mix" && leaving !== "mix" && !S.booting) enterMix();
   if (next === "compare" && leaving !== "compare" && !S.booting) enterCompare();   // while the service starts, Compare shows its ghost
   render();
 }

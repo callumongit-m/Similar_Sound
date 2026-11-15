@@ -1,10 +1,12 @@
 """HTTP surface for the floating window. Thin: all behaviour lives in jobs/store/pipeline."""
 from __future__ import annotations
 
+import json
 import os
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from pathlib import Path
@@ -14,7 +16,7 @@ from dataclasses import asdict
 import logging
 import threading
 
-from . import logsetup, ableton, coach, config, download, keychain, library, listen, llm, models, names, pipeline, rename, similarity
+from . import logsetup, mix, ableton, coach, config, download, keychain, library, listen, llm, models, names, pipeline, rename, similarity
 from .providers import PROVIDERS
 from .jobs import JobQueue
 from .store import Store
@@ -72,7 +74,7 @@ class Target(BaseModel):
 
 
 def create_app(store: Store | None = None, queue: JobQueue | None = None, listener: listen.Listener | None = None,
-               client=None, keys=keychain, connect=llm.connect, backfill=rename.backfill) -> FastAPI:
+               client=None, meter=None, keys=keychain, connect=llm.connect, backfill=rename.backfill) -> FastAPI:
     config.ensure_dirs()
     if store is None:                       # the real service (tests pass their own store and must not write the real log)
         logsetup.setup(config.LOG_PATH)
@@ -80,6 +82,7 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     queue = queue or JobQueue(store, pipeline.ingest, ableton.is_running,
                               peek=lambda src: download.peek(src, names.known_artists(store)))
     listener = listener or listen.Listener(store)
+    meter = meter or mix.MixMeter()
     client = client or (lambda: llm.Client(store))
     comparison: dict = {}   # the latest comparison, so "ask about it" has something to talk about
 
@@ -261,6 +264,19 @@ def create_app(store: Store | None = None, queue: JobQueue | None = None, listen
     def remove_from_collection(cid: int, track_id: str):
         library.remove(store, cid, track_id)
         return {"id": cid}
+
+    # ---- the live spectrum of the project (Mix tab) ----
+    @app.get("/mix/stream")
+    def mix_stream():
+        """Server-sent events, about 30 a second, for as long as the window keeps the connection open."""
+        def events():
+            frames = meter.frames()
+            try:
+                for f in frames:
+                    yield f"data: {json.dumps(f, separators=(',', ':'))}\n\n"
+            finally:
+                frames.close()                 # the window went away: stop the audio helper
+        return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-store"})
 
     # ---- hear the project, compare it ----
     @app.post("/listen/start")

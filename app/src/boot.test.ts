@@ -89,6 +89,11 @@ function fakeService() {
     if (path === "/listen/start") { W.listen = { ...W.listen, state: "waiting" }; return ok(W.listen); }
     if (path === "/listen/cancel") { W.listen = { ...W.listen, state: "idle" }; return ok(W.listen); }
     if (/^\/collections\/\d+\/ask$/.test(path)) { if (W.askError) return fail(503, W.askError); return ok({ answer: W.answerText ?? "They all share a steady kick." }); }
+    if (path === "/mix/stream") {
+      (W as any).mixSignal = init?.signal;
+      const frame = `data: ${JSON.stringify({ state: "waiting", message: "Open Ableton Live and press play." })}\n\n`;
+      return { ok: true, status: 200, body: new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(frame)); } }) };
+    }
     if (path === "/compare") return ok(GAPS);
     if (path === "/compare/ask") { if (W.askError) return fail(503, W.askError); return ok({ answer: "Fix the bass first." }); }
     return fail(404, "nope");
@@ -127,7 +132,7 @@ beforeEach(() => {
 // ---------------- startup + structure ----------------
 test("the page boots with the three parts and the paste bar inside Add song", async () => {
   await boot();
-  expect($$("#nav [data-tab]").map((b) => b.textContent)).toEqual(["Add song", "Collections", "Compare my project"]);
+  expect($$("#nav [data-tab]").map((b) => b.textContent)).toEqual(["Add song", "Collections", "Compare my project", "Mix"]);
   expect($("#pane-add").hidden).toBe(false);
   expect($("#pane-collections").hidden).toBe(true);
   expect(($("#url") as HTMLInputElement).placeholder).toBe("Paste a SoundCloud link");
@@ -143,6 +148,20 @@ test("switching parts shows one at a time and slides the highlight", async () =>
   expect($("#nav").style.getPropertyValue("--i")).toBe("1");
   tab("compare");
   expect($("#nav").style.getPropertyValue("--i")).toBe("2");
+});
+
+test("Mix listens only while its tab is open and shows what the service says", async () => {
+  await boot();
+  expect(W.calls.some((c) => c.path === "/mix/stream")).toBe(false);          // nothing listens until you open Mix
+  tab("mix");
+  await tick(80);
+  expect(W.calls.some((c) => c.path === "/mix/stream")).toBe(true);
+  expect($("#mixmsg").textContent).toBe("Open Ableton Live and press play.");
+  expect($("#pane-mix").hidden).toBe(false);
+  const signal = (W as any).mixSignal as AbortSignal;
+  expect(signal.aborted).toBe(false);
+  tab("add");
+  expect(signal.aborted).toBe(true);                                           // leaving closes the stream, which stops the helper
 });
 
 // ---------------- Add song ----------------

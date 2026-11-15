@@ -1,5 +1,5 @@
 // Typed client for the local Similar_Sound service. The only place that knows URLs and payload shapes.
-const BASE = "http://127.0.0.1:8765";
+export const BASE = "http://127.0.0.1:8765";
 
 export type JobStatus = "pending" | "running" | "done" | "error" | "needs_timestamp";
 export interface Job { id: number; source: string; status: JobStatus; stage: string; error: string | null; title: string | null; artist: string | null; track_key: string }

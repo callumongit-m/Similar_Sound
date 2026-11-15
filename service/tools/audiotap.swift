@@ -2,6 +2,7 @@
 // virtual audio driver. Used to hear Ableton Live while the user presses play.
 //
 //   audiotap --pid <pid> --out <file.wav> [--max <seconds>]
+//   audiotap --pid <pid> --stream          live meter feed: "FMT <rate> <channels>\n", then raw interleaved float32 on stdout, nothing kept
 //   audiotap --selftest <file.wav>          writes a 1.5 s test tone through the same WAV writer (needs no audio access)
 //
 // stdout: "L <rms> <seconds>" about ten times a second.  Stops on SIGINT/SIGTERM or at --max, then
@@ -41,6 +42,7 @@ func writeWav(_ data: [Float], channels: Int, sampleRate: Double, to path: Strin
 var pid: pid_t = 0
 var outPath = ""
 var maxSeconds = 90.0
+var streaming = false
 var args = Array(CommandLine.arguments.dropFirst())
 if args.first == "--selftest", args.count == 2 {   // exercise the WAV writer alone: a stereo tone, left louder than right
     let rate = 44100.0
@@ -51,6 +53,7 @@ if args.first == "--selftest", args.count == 2 {   // exercise the WAV writer al
 }
 while !args.isEmpty {
     let flag = args.removeFirst()
+    if flag == "--stream" { streaming = true; continue }
     guard !args.isEmpty else { die("missing value for \(flag)", code: 2) }
     let value = args.removeFirst()
     switch flag {
@@ -60,7 +63,7 @@ while !args.isEmpty {
     default: die("unknown flag \(flag)", code: 2)
     }
 }
-guard pid > 0, !outPath.isEmpty else { die("usage: audiotap --pid <pid> --out <file.wav> [--max <s>]", code: 2) }
+guard pid > 0, streaming || !outPath.isEmpty else { die("usage: audiotap --pid <pid> --out <file.wav> [--max <s>]", code: 2) }
 
 // ---- helpers
 func property<T>(_ object: AudioObjectID, _ selector: AudioObjectPropertySelector, qualifier: UnsafeRawPointer? = nil,
@@ -129,6 +132,8 @@ guard format.mFormatID == kAudioFormatLinearPCM, format.mBitsPerChannel == 32, c
     die("unexpected tap format", code: 2)
 }
 
+if streaming { print("FMT \(Int(sampleRate)) \(channels)"); fflush(stdout) }
+
 // ---- recording state (touched from the IO thread and the main loop)
 let lock = NSLock()
 var samples = [Float]()
@@ -141,6 +146,19 @@ var ioProc: AudioDeviceIOProcID?
 let ioStatus = AudioDeviceCreateIOProcIDWithBlock(&ioProc, aggregateID, DispatchQueue(label: "similar-sound.tap")) {
     _, inputData, _, _, _ in
     let buffers = UnsafeMutableAudioBufferListPointer(UnsafeMutablePointer(mutating: inputData))
+    if streaming {                       // the audio goes straight down the pipe: never stored here
+        var out = [Float]()
+        if nonInterleaved, buffers.count >= channels {
+            let frames = Int(buffers[0].mDataByteSize) / MemoryLayout<Float>.size
+            out.reserveCapacity(frames * channels)
+            for f in 0..<frames { for ch in 0..<channels { out.append(buffers[ch].mData!.assumingMemoryBound(to: Float.self)[f]) } }
+        } else {
+            for b in buffers { if let d = b.mData { out.append(contentsOf: UnsafeBufferPointer(start: d.assumingMemoryBound(to: Float.self), count: Int(b.mDataByteSize) / 4)) } }
+        }
+        out.withUnsafeBytes { _ = fwrite($0.baseAddress, 1, $0.count, stdout) }
+        fflush(stdout)
+        return
+    }
     lock.lock()
     if nonInterleaved, buffers.count >= channels, let first = buffers[0].mData {
         // one buffer per channel: weave them into interleaved frames so everything downstream sees one layout
@@ -186,6 +204,10 @@ let started = Date()
 let timer = DispatchSource.makeTimerSource(queue: .main)
 timer.schedule(deadline: .now() + 0.1, repeating: 0.1)
 timer.setEventHandler {
+    if streaming {
+        if stop { AudioDeviceStop(aggregateID, proc); AudioDeviceDestroyIOProcID(aggregateID, proc); AudioHardwareDestroyAggregateDevice(aggregateID); AudioHardwareDestroyProcessTap(tapID); exit(0) }
+        return
+    }
     lock.lock()
     let rms = windowCount > 0 ? (windowSumSquares / Double(windowCount)).squareRoot() : 0
     windowSumSquares = 0; windowCount = 0
