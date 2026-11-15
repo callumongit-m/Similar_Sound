@@ -7,6 +7,7 @@ a language model about a song, a whole collection of songs, or your own project 
 Built for UK minimal / tech house, where the difference between a reference and your own track is mostly groove,
 low end and what each layer plays, not something a spectrum analyser shows on its own.
 
+- **Handing this to someone else?** [LLM_GUIDE.md](LLM_GUIDE.md) is written for an AI assistant to walk them through install, the API key and fixes.
 - **Floating window** (Tauri, menu-bar note, sits over full-screen Ableton). Not a CLI.
 - **Local analysis**: Demucs stems, CLAP embeddings, librosa and pyloudnorm measurements. No analysis cost.
 - **Bring any LLM key** (Anthropic, OpenAI, Gemini, OpenRouter, Groq, custom). The key lives in the macOS Keychain.
