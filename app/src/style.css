@@ -178,7 +178,8 @@ code { background: var(--glass-hi); padding: 1px 6px; border-radius: 6px; font-s
 .card.folder.bump { animation: bump .45s var(--spring); }
 @keyframes bump { 40% { transform: scale(1.03); } }
 .dragging { opacity: .45; transform: scale(.97); }
-[draggable="true"] { cursor: grab; }
+[draggable="true"], .card.click[draggable="true"] { cursor: grab; }   /* .card.click is pointer: the longer selector keeps a draggable card a grab hand */
+[draggable="true"]:active { cursor: grabbing; }
 .field.rename { padding: 3px 8px; }
 
 /* ---------- compare: the orb ---------- */

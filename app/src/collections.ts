@@ -3,7 +3,7 @@
 import { api, type Collection } from "./api";
 import { S, trackById } from "./state";
 import { songCard } from "./songs";
-import { $, errorText, esc, niceName, run, syncCards, toast } from "./ui";
+import { $, dragging, errorText, esc, niceName, run, syncCards, toast } from "./ui";
 import type { Card } from "./ui";
 
 const CHAT_ICON = `<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.5-4.6A8 8 0 1 1 21 12z"/></svg>`;
@@ -126,8 +126,9 @@ export function mountCollections(root: HTMLElement, host: CollHost) {
     e.dataTransfer.setData("text/plain", el.dataset.track);
     e.dataTransfer.effectAllowed = "copy";
     el.classList.add("dragging");
+    dragging.active = true;
   });
-  root.addEventListener("dragend", (e) => (e.target as HTMLElement).classList?.remove("dragging"));
+  root.addEventListener("dragend", (e) => { dragging.active = false; (e.target as HTMLElement).classList?.remove("dragging"); });
   const overFolder = (e: DragEvent) => (e.target as HTMLElement).closest<HTMLElement>(".folder");
   root.addEventListener("dragover", (e) => { const f = overFolder(e); if (!f) return; e.preventDefault(); root.querySelectorAll(".folder.drop").forEach((x) => x !== f && x.classList.remove("drop")); f.classList.add("drop"); });
   root.addEventListener("dragleave", (e) => { const f = overFolder(e); if (f && !f.contains(e.relatedTarget as Node)) f.classList.remove("drop"); });

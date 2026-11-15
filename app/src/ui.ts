@@ -37,7 +37,11 @@ type CardEl = HTMLElement & { _html?: string };
 
 /** Keyed reconcile: existing cards are updated in place, new ones animate in, removed ones animate out.
  *  Input values and focus inside a card survive an update. */
+const TRANSIENT = ["dragging", "drop", "bump"];   // classes the views add and remove themselves
+export const dragging = { active: false };      // a drag is in progress: lists hold still until it ends
+
 export function syncCards(container: HTMLElement, cards: Card[]) {
+  if (dragging.active) return;
   const existing = new Map<string, CardEl>();
   container.querySelectorAll<CardEl>(":scope > .card").forEach((el) => { if (!el.classList.contains("leaving")) existing.set(el.dataset.key!, el); });
   const wanted = new Set(cards.map((c) => c.key));
@@ -56,9 +60,18 @@ export function syncCards(container: HTMLElement, cards: Card[]) {
       el.dataset.key = c.key;
       el.addEventListener("animationend", (e) => { if (e.target === el) el!.classList.remove("enter"); });
     }
-    el.className = `card${fresh ? " enter" : el.classList.contains("enter") ? " enter" : ""} ${c.cls ?? ""}`.trim();
-    el.draggable = !!c.draggable;
-    for (const [k, v] of Object.entries(c.attrs ?? {})) { if (v === undefined) el.removeAttribute(`data-${k}`); else el.setAttribute(`data-${k}`, v); }
+    // Only write what changed. This runs every second or so, and rewriting a draggable card's class or `draggable`
+    // while the mouse is down cancels the browser's pending drag (the cursor flickers and the drag never starts).
+    const want = `card${fresh ? " enter" : el.classList.contains("enter") ? " enter" : ""} ${c.cls ?? ""}`.trim();
+    const stable = (names: string[]) => names.filter((k) => !TRANSIENT.includes(k)).sort().join(" ");
+    if (stable([...el.classList]) !== stable(want.split(/\s+/))) {
+      el.className = [want, ...TRANSIENT.filter((k) => el.classList.contains(k))].join(" ");
+    }
+    if (el.draggable !== !!c.draggable) el.draggable = !!c.draggable;
+    for (const [k, v] of Object.entries(c.attrs ?? {})) {
+      if (v === undefined) { if (el.hasAttribute(`data-${k}`)) el.removeAttribute(`data-${k}`); }
+      else if (el.getAttribute(`data-${k}`) !== v) el.setAttribute(`data-${k}`, v);
+    }
     if (el._html !== c.html) {
       const kept = new Map<string, string>();
       el.querySelectorAll<HTMLInputElement>("[data-keep]").forEach((i) => kept.set(i.dataset.keep!, i.value));
