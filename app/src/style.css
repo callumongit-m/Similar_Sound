@@ -361,8 +361,41 @@ body.booting .ghostlist { max-height: 420px; opacity: 1; }
 .mix canvas { width: 100%; height: 230px; display: block; border-radius: 16px; background: rgba(0,0,0,0.22); border: 1px solid var(--stroke-soft); }
 .mix-status { text-align: center; color: var(--muted); font-size: 12px; min-height: 18px; margin-top: 8px; }
 .mix-bar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
-.mix-bar[hidden], .mix-wave[hidden] { display: none; }
-.mix-wave { display: contents; }
+.mix-bar[hidden], .mix-wave[hidden], .mix-lufsopts[hidden], .lufs-only[hidden], .lufs-chip[hidden] { display: none; }
+.mix-wave, .mix-lufsopts { display: contents; }
+.mix-stage { display: flex; gap: 10px; align-items: flex-start; }
+.mix-stage canvas { flex: 1; min-width: 0; }
+.mix[data-view="lufs"] canvas { height: 130px; }
+
+/* LUFS: one number up top that answers "where am I?", the live meters beside the history, the rest quiet underneath */
+.lufs-hero { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 4px 2px 10px; }
+.lufs-big { display: flex; flex-direction: column; }
+.lufs-big b { font-size: 44px; line-height: 1; font-weight: 300; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+.lufs-big span { margin-top: 4px; font-size: 11px; color: var(--muted); }
+.lufs-chip { font-size: 12px; padding: 5px 12px; border-radius: 999px; white-space: nowrap; background: var(--glass); border: 1px solid var(--stroke-soft);
+  transition: color .2s, background-color .2s, border-color .2s; }
+.lufs-chip.on { color: #8fe3a8; background: rgba(110,220,150,.14); border-color: rgba(110,220,150,.3); }
+.lufs-chip.below { color: #ffc47a; background: rgba(255,185,90,.14); border-color: rgba(255,185,90,.3); }
+.lufs-chip.above { color: #ff9a94; background: rgba(255,120,110,.14); border-color: rgba(255,120,110,.3); }
+.lufs-seg { display: inline-flex; padding: 2px; margin-bottom: 8px; border-radius: 999px; background: var(--glass); border: 1px solid var(--stroke-soft); }
+.lufs-seg[hidden] { display: none; }
+.lufs-seg button { background: none; border: 0; color: var(--muted); font-size: 12px; padding: 3px 12px; border-radius: 999px; transition: color .2s, background-color .2s; }
+.lufs-seg button.active { color: var(--text); background: var(--glass-hi); box-shadow: inset 0 1px 0 rgba(255,255,255,0.22), 0 1px 3px rgba(0,0,0,0.18); }
+.lufs-meters { display: flex; gap: 8px; flex: none; }
+.lufs-meters[hidden] { display: none; }
+.lufs-meter { display: flex; flex-direction: column; align-items: center; width: 34px; }
+.lufs-track { position: relative; width: 14px; height: 114px; border-radius: 7px; overflow: hidden; background: rgba(0,0,0,0.22); border: 1px solid var(--stroke-soft); }
+.lufs-fill { position: absolute; inset: 0; clip-path: inset(100% 0 0 0); transition: clip-path .12s linear;
+  background: linear-gradient(to top, #2a1a6e, #5a2fc2, #b83ad6, #ff5c8a, #ffb15c); }
+.lufs-meter b { margin-top: 3px; font-size: 11px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.lufs-meter span { font-size: 10px; color: var(--muted); }
+.lufs-stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 10px; }
+.lufs-stats[hidden] { display: none; }
+.lufs-stat { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 4px; padding: 7px 10px 6px; border-radius: 12px; background: var(--glass); border: 1px solid var(--stroke-soft); }
+.lufs-stat span { flex-basis: 100%; font-size: 10px; color: var(--muted); }
+.lufs-stat b { font-size: 15px; font-weight: 500; font-variant-numeric: tabular-nums; transition: color .2s; }
+.lufs-stat b.warn { color: #ff9a94; }
+.lufs-stat i { font-style: normal; font-size: 10px; color: var(--muted); }
 .mix select { appearance: none; -webkit-appearance: none; font-size: 12px; padding: 5px 24px 5px 11px; border-radius: 999px; color: var(--text); cursor: pointer; outline: none;
   background: var(--glass) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' fill='none' stroke='%23ffffff99' stroke-width='1.6' stroke-linecap='round'%3E%3Cpath d='M1 1l4 4 4-4'/%3E%3C/svg%3E") no-repeat right 9px center;
   border: 1px solid var(--stroke-soft); box-shadow: inset 0 1px 0 rgba(255,255,255,0.12); transition: background-color .15s, border-color .15s; }
