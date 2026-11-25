@@ -78,17 +78,6 @@ def test_endpoint_streams_server_sent_events(tmp_path):
             if len(lines) == 2:
                 break
     assert lines[0]["state"] == "live" and len(lines[0]["bands"]) == mix.BANDS
-    assert set(lines[0]["lufs"]) == {"momentary", "short", "integrated", "lra", "true_peak", "plr", "hist"}
-
-
-def test_loudness_restarts_with_each_listening_session():
-    sources = iter([Fake(amp=0.5, blocks=60), Fake(amp=0.05, blocks=60)])
-    f = mix.MixMeter(lambda: next(sources), retry_s=0).frames()
-    first = [next(f) for _ in range(60)][-1]["lufs"]["true_peak"]
-    next(f)                                                    # "waiting": the first source ended
-    second = next(f)["lufs"]["true_peak"]
-    assert first > -7 and second < -25                         # the loud session's peak did not carry over
-    f.close()
 
 
 def test_columns_give_peaks_for_left_right_mid_side():

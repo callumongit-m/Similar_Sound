@@ -1,20 +1,13 @@
-// "Mix": your Ableton mix live, as a Spectrum (levels by frequency), a Waveform (level over time) or LUFS (loudness meter).
-// The service streams ~60 frames a second: band levels (dB, 20 Hz to 20 kHz, log-spaced), peaks per time slice, the
-// low/mid/high energy split and the loudness readings. This file only smooths and paints them. Audio never reaches the window.
+// "Mix": your Ableton mix live, as a Spectrum (levels by frequency) or a Waveform (level over time).
+// The service streams ~30 frames a second: band levels (dB, 20 Hz to 20 kHz, log-spaced), peaks per time slice and the
+// low/mid/high energy split. This file only smooths and paints them. Audio never reaches the window.
 import { BASE } from "./api";
 import { $ } from "./ui";
 
 const opts = (list: [string, string][]) => list.map(([v, t]) => `<option value="${v}">${t}</option>`).join("");
-const stat = (id: string, name: string, unit: string, tip: string) =>
-  `<div class="lufs-stat" title="${tip}"><span>${name}</span><b id="lufs-${id}">—</b><i>${unit}</i></div>`;
-const bar = (id: string, name: string, tip: string) =>
-  `<div class="lufs-meter" title="${tip}"><div class="lufs-track"><div class="lufs-fill" id="lufs-fill-${id}"></div></div><b id="lufs-${id}">—</b><span>${name}</span></div>`;
 export const mixHtml = `<div class="mix">
   <div class="mix-bar">
-    <select id="mixview" aria-label="Meter">${opts([["spectrum", "Spectrum"], ["waveform", "Waveform"], ["lufs", "LUFS"]])}</select>
-    <span class="mix-lufsopts" id="mixlufsopts" hidden>
-      <select id="mixtarget" aria-label="Target loudness">${opts([["-14", "Streaming (−14)"], ["-23", "Broadcast (−23)"], ["-9", "Loud master (−9)"], ["off", "No target"]])}</select>
-    </span>
+    <select id="mixview" aria-label="Meter">${opts([["spectrum", "Spectrum"], ["waveform", "Waveform"]])}</select>
     <span class="mix-wave" id="mixwaveopts" hidden>
       <select id="mixchan" aria-label="Channels">${opts([["mid", "Mid"], ["left", "Left"], ["right", "Right"], ["side", "Side"], ["lr", "Left / Right"], ["ms", "Mid / Side"]])}</select>
       <select id="mixcolor" aria-label="Colour">${opts([["multi", "Multi-band"], ["map", "Colour map"], ["static", "Static"]])}</select>
@@ -22,26 +15,7 @@ export const mixHtml = `<div class="mix">
       <select id="mixloop" aria-label="Display">${opts([["scroll", "Scrolling"], ["loop", "Looping"]])}</select>
     </span>
   </div>
-  <div class="lufs-only lufs-hero" hidden>
-    <div class="lufs-big" title="Integrated: the average loudness of everything played since you opened this tab">
-      <b id="lufs-integrated">—</b><span>Integrated · LUFS</span>
-    </div>
-    <span class="lufs-chip" id="lufs-chip" hidden></span>
-  </div>
-  <div class="lufs-only lufs-seg" role="group" aria-label="Graph" hidden>
-    <button type="button" data-lufsview="history">History</button><button type="button" data-lufsview="distribution">Distribution</button>
-  </div>
-  <div class="mix-stage">
-    <canvas id="mixcv" width="372" height="230"></canvas>
-    <div class="lufs-only lufs-meters" hidden>
-      ${bar("momentary", "Now", "Momentary: loudness over the last 0.4 s")}${bar("short", "3 s", "Short-term: loudness over the last 3 s")}
-    </div>
-  </div>
-  <div class="lufs-only lufs-stats" hidden>
-    ${stat("lra", "Range", "LU", "Loudness range: how much the loudness moves around. Higher means more dynamic.")}
-    ${stat("true_peak", "True peak", "dBTP", "The highest the signal gets, including between samples. Keep it under −1 to be safe when exporting.")}
-    ${stat("plr", "Peak to loudness", "dB", "True peak minus integrated loudness: how far the peaks sit above the average.")}
-  </div>
+  <canvas id="mixcv" width="372" height="230"></canvas>
   <div class="mix-status" id="mixmsg">Connecting…</div>
 </div>`;
 
@@ -54,7 +28,7 @@ export const PALETTE = ["#2a1a6e", "#5a2fc2", "#b83ad6", "#ff5c8a", "#ffb15c"];
 
 // ---------- settings (remembered between runs) ----------
 const SETTINGS_KEY = "similar-sound.mix";
-const settings = { view: "spectrum", chan: "mid", color: "multi", speed: "6", loop: "scroll", target: "-14", lufsView: "history" };
+const settings = { view: "spectrum", chan: "mid", color: "multi", speed: "6", loop: "scroll" };
 try { Object.assign(settings, JSON.parse(localStorage.getItem(SETTINGS_KEY) ?? "{}")); } catch { /* private window: defaults */ }
 const save = () => { try { localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings)); } catch { /* not worth a failure */ } };
 
@@ -96,7 +70,7 @@ function setup(cv: HTMLCanvasElement) {
   if (!ctx) return null;
   const dpr = window.devicePixelRatio || 1;
   const w = cv.clientWidth || 372, h = cv.clientHeight || 230;
-  if (cv.width !== Math.round(w * dpr) || cv.height !== Math.round(h * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
+  if (cv.width !== Math.round(w * dpr)) { cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr); }
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, w, h);
   return { ctx, w, h };
@@ -229,101 +203,14 @@ function stepWaveform(now: number) {
   if (settings.loop === "loop" && recv === 0) head = 0;
 }
 
-// ---------- LUFS ----------
-interface Lufs { momentary: number; short: number; integrated: number | null; lra: number | null; true_peak: number; plr: number | null; hist: number[] }
-const LU_TOP = 0, LU_BOTTOM = -50, HIST_LO = -60;       // the graph's and bars' range; HIST_LO is where the service's histogram bins start
-const HISTORY_S = 180, HISTORY_HZ = 10, HISTORY_MAX = HISTORY_S * HISTORY_HZ, MIN_SPAN = 30 * HISTORY_HZ;
-const ON_TARGET_LU = 0.5, PEAK_WARN_DBTP = -1;           // within half a LU is "on target"; peaks above -1 dBTP can clip once exported
-let lufs: Lufs | null = null;
-let histM: number[] = [], histS: number[] = [];          // momentary / short-term, one point every 100 ms
-let lastHistory = 0, lastReadout = 0;
-
-const fmt = (v: number | null | undefined) => (v == null ? "—" : v <= -100 ? "−∞" : v.toFixed(1).replace("-", "−"));
-const barPct = (lu: number) => Math.min(100, Math.max(0, ((lu - LU_BOTTOM) / (LU_TOP - LU_BOTTOM)) * 100));
-
-/** Words, not numbers, for the question "am I where I want to be?": above, below or on the target. */
-function showChip(integrated: number | null) {
-  const chip = $("#lufs-chip");
-  chip.hidden = settings.target === "off" || integrated == null;
-  if (integrated == null || chip.hidden) return;
-  const d = integrated - Number(settings.target), a = Math.abs(d).toFixed(1);
-  const [kind, text] = Math.abs(d) < ON_TARGET_LU ? ["on", "On target"] : d > 0 ? ["above", `${a} LU above target`] : ["below", `${a} LU below target`];
-  chip.className = `lufs-chip ${kind}`;                                      // wording as well as colour, so it never relies on colour alone
-  chip.textContent = text;
-}
-
-function showReadouts(l: Lufs) {
-  for (const k of ["momentary", "short", "integrated", "lra", "true_peak", "plr"] as const) $(`#lufs-${k}`).textContent = fmt(l[k]);
-  for (const k of ["momentary", "short"] as const) $(`#lufs-fill-${k}`).style.clipPath = `inset(${100 - barPct(l[k])}% 0 0 0)`;
-  $("#lufs-true_peak").classList.toggle("warn", l.true_peak > PEAK_WARN_DBTP);
-  showChip(l.integrated);
-}
-
-function paintLufs(cv: HTMLCanvasElement) {
-  const g = setup(cv);
-  if (!g) return;
-  const { ctx, w, h } = g;
-  const padB = 16, plotH = h - padB, labelW = 24, plotX = labelW, plotW = w - labelW;
-  const y = (lu: number) => plotH * (1 - Math.min(1, Math.max(0, (lu - LU_BOTTOM) / (LU_TOP - LU_BOTTOM))));
-
-  ctx.font = "9px -apple-system, sans-serif";
-  ctx.textAlign = "right";
-  for (let lu = LU_TOP; lu >= LU_BOTTOM; lu -= 10) {
-    ctx.fillStyle = "rgba(255,255,255,0.07)"; ctx.fillRect(plotX, Math.round(y(lu)), plotW, 1);
-    ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.fillText(String(lu).replace("-", "−"), plotX - 4, Math.min(plotH - 1, y(lu) + 8));
-  }
-  const fill = ctx.createLinearGradient(0, plotH, 0, 0);
-  PALETTE.forEach((c, i) => fill.addColorStop(i / (PALETTE.length - 1), c));
-
-  if (settings.lufsView === "distribution") {                               // where the short-term loudness has spent its time
-    const hist = lufs?.hist ?? [], most = Math.max(1, ...hist);
-    hist.forEach((count, i) => {
-      if (!count) return;
-      const top = y(HIST_LO + i + 1), bar = Math.max(1, y(HIST_LO + i) - top + 0.5), len = (count / most) * plotW;
-      ctx.fillStyle = fill; ctx.globalAlpha = 0.85; ctx.fillRect(plotX, top, len, bar); ctx.globalAlpha = 1;
-    });
-    ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.textAlign = "right"; ctx.fillText("time spent at each level", plotX + plotW - 2, h - 4);
-  } else {
-    const span = Math.max(MIN_SPAN, histS.length), secs = Math.round(span / HISTORY_HZ);   // the graph fills the width as the session grows
-    ctx.textAlign = "left"; ctx.fillStyle = "rgba(255,255,255,0.4)"; ctx.fillText(secs < 60 ? `−${secs} s` : `−${+(secs / 60).toFixed(1)} min`, plotX, h - 4);
-    ctx.textAlign = "right"; ctx.fillText("now", plotX + plotW, h - 4);
-    const xAt = (i: number, n: number) => plotX + plotW - (n - 1 - i) * (plotW / (span - 1));
-    const line = (vals: number[]) => { ctx.beginPath(); vals.forEach((v, i) => (i ? ctx.lineTo(xAt(i, vals.length), y(v)) : ctx.moveTo(xAt(i, vals.length), y(v)))); };
-    if (histS.length > 1) {                                                  // short-term: the filled body, momentary: the fast line over it
-      const n = histS.length;
-      line(histS); ctx.lineTo(xAt(n - 1, n), plotH); ctx.lineTo(xAt(0, n), plotH); ctx.closePath();
-      ctx.globalAlpha = 0.55; ctx.fillStyle = fill; ctx.fill(); ctx.globalAlpha = 1;
-      line(histS); ctx.lineWidth = 1.6; ctx.lineJoin = "round"; ctx.strokeStyle = PALETTE[3]; ctx.stroke();
-      line(histM); ctx.lineWidth = 1; ctx.strokeStyle = "rgba(255,255,255,0.75)"; ctx.stroke();
-    }
-  }
-  if (settings.target !== "off") {
-    const ty = Math.round(y(Number(settings.target))) + 0.5;
-    ctx.setLineDash([4, 3]); ctx.strokeStyle = PALETTE[4]; ctx.lineWidth = 1;
-    ctx.beginPath(); ctx.moveTo(plotX, ty); ctx.lineTo(plotX + plotW, ty); ctx.stroke(); ctx.setLineDash([]);
-  }
-}
-
 function animate(cv: HTMLCanvasElement) {
   const now = performance.now();
   if (settings.view === "waveform") { stepWaveform(now); paintWaveform(cv); }
-  else if (settings.view === "lufs") paintLufs(cv);
   else { stepSpectrum(now); paintSpectrum(cv); }
   raf = requestAnimationFrame(() => animate(cv));
 }
 
 // ---------- the stream ----------
-/** History gets a point every 100 ms, the numbers are rewritten ten times a second: enough to read, cheap to draw. */
-function takeLufs(l: Lufs, now: number) {
-  lufs = l;
-  if (now - lastHistory >= 1000 / HISTORY_HZ) {
-    lastHistory = now;
-    histM.push(l.momentary); histS.push(l.short);
-    if (histM.length > HISTORY_MAX) { histM.shift(); histS.shift(); }
-  }
-  if (now - lastReadout >= 100) { lastReadout = now; showReadouts(l); }
-}
-
 function handle(frame: any) {
   const msg = $("#mixmsg");
   if (frame.state === "live") {
@@ -331,7 +218,6 @@ function handle(frame: any) {
     target = bands.map((db, i) => tilt(i, bands.length, db));
     for (const c of frame.cols ?? []) pushColumn(c, frame.tri ?? [0, 0, 0]);
     lastFrame = performance.now();
-    if (frame.lufs) takeLufs(frame.lufs, lastFrame);
     msg.textContent = "";
   } else {
     target = target.map(() => DB_BOTTOM);
@@ -365,23 +251,14 @@ async function stream(signal: AbortSignal) {
 // ---------- the controls ----------
 function syncControls() {
   const set = (id: string, v: string) => { $<HTMLSelectElement>(`#${id}`).value = v; };
-  set("mixview", settings.view); set("mixtarget", settings.target); set("mixchan", settings.chan); set("mixcolor", settings.color); set("mixspeed", settings.speed); set("mixloop", settings.loop);
+  set("mixview", settings.view); set("mixchan", settings.chan); set("mixcolor", settings.color); set("mixspeed", settings.speed); set("mixloop", settings.loop);
   $("#mixwaveopts").hidden = settings.view !== "waveform";
-  $("#mixlufsopts").hidden = settings.view !== "lufs";
-  document.querySelectorAll<HTMLElement>(".lufs-only").forEach((el) => { el.hidden = settings.view !== "lufs"; });
-  document.querySelectorAll<HTMLElement>("[data-lufsview]").forEach((b) => b.classList.toggle("active", b.dataset.lufsview === settings.lufsView));
-  $(".mix").dataset.view = settings.view;
-  if (lufs) showReadouts(lufs);
 }
 
 export function mountMix(root: HTMLElement) {
-  root.addEventListener("click", (e) => {
-    const view = (e.target as HTMLElement).closest<HTMLElement>("[data-lufsview]")?.dataset.lufsview;
-    if (view) { settings.lufsView = view; save(); syncControls(); }
-  });
   root.addEventListener("change", (e) => {
     const el = e.target as HTMLSelectElement;
-    const key = ({ mixview: "view", mixchan: "chan", mixcolor: "color", mixspeed: "speed", mixloop: "loop", mixtarget: "target" } as Record<string, keyof typeof settings>)[el.id];
+    const key = ({ mixview: "view", mixchan: "chan", mixcolor: "color", mixspeed: "speed", mixloop: "loop" } as Record<string, keyof typeof settings>)[el.id];
     if (!key) return;
     settings[key] = el.value;
     if (key === "speed" || key === "loop") resetRing();         // a different time window: start the picture afresh
@@ -393,8 +270,6 @@ export function enterMix() {
   leaveMix();
   abort = new AbortController();
   target = []; shown = []; peaks = []; lastSpec = 0; resetRing();
-  lufs = null; histM = []; histS = []; lastHistory = lastReadout = 0;
-  showReadouts({ momentary: -120, short: -120, integrated: null, lra: null, true_peak: -120, plr: null, hist: [] });     // loudness starts afresh each time the tab opens, like the service's meter
   syncControls();
   $("#mixmsg").textContent = "Connecting…";
   raf = requestAnimationFrame(() => animate($<HTMLCanvasElement>("#mixcv")));

@@ -5,8 +5,7 @@ keeps iterating (the window's open stream). Closing the iterator stops the audio
   {"state": "waiting", "message": ...}                      Ableton closed, or not playing yet
   {"state": "live", "bands": [dB x BANDS], "rms": dB,       bands run 20 Hz to 20 kHz, log-spaced
    "cols": [[L, R, Mid, Side] peaks x SUBCOLS],              for the waveform: SUBCOLS time slices of this frame
-   "tri": [low, mid, high],                                  share of the energy below 250 Hz / to 4 kHz / above
-   "lufs": {...}}                                            loudness.Loudness readings, restarted with each listening session
+   "tri": [low, mid, high]}                                  share of the energy below 250 Hz / to 4 kHz / above
 The audio comes from the same Ableton process tap as "Compare my project", streamed (tools/audiotap --stream).
 It is analysed in memory and dropped: nothing is written to disk.
 """
@@ -19,7 +18,7 @@ from typing import Callable, Iterator, Protocol
 
 import numpy as np
 
-from . import ableton, listen, loudness
+from . import ableton, listen
 
 log = logging.getLogger("similar_sound.mix")
 
@@ -153,13 +152,12 @@ class MixMeter:
                 yield {"state": "error", "message": str(e)}
                 return
             log.info("mix meter listening (%d Hz, %d ch)", src.rate, src.channels)
-            an, loud, hop = Analyser(src.rate), loudness.Loudness(src.rate), max(1, src.rate // FPS)
+            an, hop = Analyser(src.rate), max(1, src.rate // FPS)
             try:
                 while (block := src.read(hop)) is not None:
                     an.push(block)
                     bands = an.bands()
-                    yield {"state": "live", "bands": bands, "rms": rms_db(block), "cols": columns(block), "tri": tri(bands),
-                           "lufs": loud.push(block)}
+                    yield {"state": "live", "bands": bands, "rms": rms_db(block), "cols": columns(block), "tri": tri(bands)}
             finally:
                 src.close()
             yield {"state": "waiting", "message": "Ableton's audio stopped. Press play."}

@@ -164,32 +164,20 @@ test("Mix listens only while its tab is open and shows what the service says", a
   expect(signal.aborted).toBe(true);                                           // leaving closes the stream, which stops the helper
 });
 
-test("Mix has a Spectrum / Waveform / LUFS choice; Waveform adds its own options (and works without browser storage)", async () => {
+test("Mix has a Spectrum / Waveform choice; Waveform adds its own options (and works without browser storage)", async () => {
   await boot();
   tab("mix");
   await tick(40);
   const view = $("#mixview") as HTMLSelectElement;
-  expect([...view.options].map((o) => o.text)).toEqual(["Spectrum", "Waveform", "LUFS"]);
-  expect($$(".lufs-only").every((el) => (el as HTMLElement).hidden)).toBe(true);
+  expect([...view.options].map((o) => o.text)).toEqual(["Spectrum", "Waveform"]);
   expect($("#mixwaveopts").hidden).toBe(true);                                 // spectrum has no extra options
   view.value = "waveform";
   view.dispatchEvent(new Event("change", { bubbles: true }));
   expect($("#mixwaveopts").hidden).toBe(false);
   expect([...($("#mixchan") as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Mid", "Left", "Right", "Side", "Left / Right", "Mid / Side"]);
   expect([...($("#mixcolor") as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Multi-band", "Colour map", "Static"]);
-  view.value = "lufs";
-  view.dispatchEvent(new Event("change", { bubbles: true }));
-  expect($$(".lufs-only").some((el) => (el as HTMLElement).hidden)).toBe(false);   // the meter is on screen as soon as LUFS is chosen
-  expect($("#mixwaveopts").hidden).toBe(true);
-  expect([...($("#mixtarget") as HTMLSelectElement).options].map((o) => o.text)).toEqual(["Streaming (−14)", "Broadcast (−23)", "Loud master (−9)", "No target"]);
-  expect($("#lufs-integrated").textContent).toBe("—");                          // nothing measured yet: a dash, not a stale or made-up number
-  expect($("#lufs-chip").hidden).toBe(true);
-  expect($$("[data-lufsview]").map((b) => b.textContent)).toEqual(["History", "Distribution"]);
-  ($("[data-lufsview=distribution]") as HTMLElement).click();
-  expect($("[data-lufsview=distribution]").classList.contains("active")).toBe(true);
   view.value = "spectrum";
   view.dispatchEvent(new Event("change", { bubbles: true }));
-  expect($$(".lufs-only").every((el) => (el as HTMLElement).hidden)).toBe(true);
 });
 
 // ---------------- Add song ----------------
