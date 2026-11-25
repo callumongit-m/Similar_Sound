@@ -9,6 +9,7 @@ low end and what each layer plays, not something a spectrum analyser shows on it
 
 - **Handing this to someone else?** [LLM_GUIDE.md](LLM_GUIDE.md) is written for an AI assistant to walk them through install, the API key and fixes.
 - **Floating window** (Tauri, menu-bar note, sits over full-screen Ableton). Not a CLI.
+- **Live Mix meter**: your Ableton mix as a Spectrum or a Waveform. A **LUFS loudness meter is in progress** (on the `dev` branch, not in this version yet).
 - **Local analysis**: Demucs stems, CLAP embeddings, librosa and pyloudnorm measurements. No analysis cost.
 - **Bring any LLM key** (Anthropic, OpenAI, Gemini, OpenRouter, Groq, custom). The key lives in the macOS Keychain.
   The cheapest working model is found by a tiny probe, and it recovers on its own when a model is retired.
